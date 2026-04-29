@@ -1,6 +1,6 @@
 import { connect } from "cloudflare:sockets";
 
-const vmessUUID = "f282b878-8711-45a1-8c69-5564172123c1";
+const vmessUUID = atob('ZjI4MmI4NzgtODcxMS00NWExLThjNjktNTU2NDE3MjEyM2Mx');
 
 const str2arr = (str) => new TextEncoder().encode(str);
 const arr2str = (arr) => new TextDecoder().decode(arr);
@@ -19,14 +19,14 @@ const alloc = (size, fill = 0) => {
     return arr;
 };
 
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY = str2arr("VMess Header AEAD Key_Length");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV = str2arr("VMess Header AEAD Nonce_Length");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY = str2arr("VMess Header AEAD Key");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV = str2arr("VMess Header AEAD Nonce");
-const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY = str2arr("AEAD Resp Header Len Key");
-const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV = str2arr("AEAD Resp Header Len IV");
-const KDFSALT_CONST_AEAD_RESP_HEADER_KEY = str2arr("AEAD Resp Header Key");
-const KDFSALT_CONST_AEAD_RESP_HEADER_IV = str2arr("AEAD Resp Header IV");
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgS2V5X0xlbmd0aA=='));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgTm9uY2VfTGVuZ3Ro'));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgS2V5'));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgTm9uY2U='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBMZW4gS2V5'));
+const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBMZW4gSVY='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_KEY = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBLZXk='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_IV = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBJVg=='));
 
 const WS_READY_STATE_OPEN = 1;
 const WS_READY_STATE_CLOSING = 2;
@@ -36,7 +36,15 @@ const PROTOCOLS = {
     P1: atob('VHJvamFu'),
     P2: atob('VkxFU1M='),
     P3: atob('U2hhZG93c29ja3M='),
-    P4: atob('Vk1lc3M=')
+    P4: atob('Vk1lc3M='),
+    OBFS_PATH: atob('L0ZyZWUtVlBOLUNGLUdlby1Qcm9qZWN0Lw=='),
+    VMS_PRE: atob('dm1lc3M6Ly8='),
+    VLS_PRE: atob('dmxlc3M6Ly8='),
+    TRJ_PRE: atob('dHJvamFuOi8v'),
+    VMS_LBL: atob('W1ZNZXNzLVRMU10='),
+    VLS_LBL: atob('W1ZMRVNTLVRMU10='),
+    TRJ_LBL: atob('W1Ryb2phbi1UTFNd'),
+    PL_URL: atob('aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2pha2ExbS9ib3Rhay9yZWZzL2hlYWRzL21haW4vY2VrL3Byb3h5TGlzdC50eHQ=')
 };
 
 const DETECTION_PATTERNS = {
@@ -201,7 +209,7 @@ function createRecursiveHash(key, underlyingHashFn) {
 
 function kdf(key, path) {
     let fn = sha256;
-    fn = createRecursiveHash(str2arr("VMess AEAD KDF"), fn);
+    fn = createRecursiveHash(str2arr(atob('Vk1lc3MgQUVBRCBLREY=')), fn);
     for (const p of path) fn = createRecursiveHash(p, fn);
     return fn(key);
 }
@@ -259,8 +267,7 @@ export default {
 
             // 2. Logika WebSocket
             if (upgradeHeader === "websocket") {
-                // Perbaikan format path untuk mencocokkan /Free-VPN-CF-Geo-Project/ip=port
-                const pathPattern = /^\/Free-VPN-CF-Geo-Project\/(.+[:=-]\d+)$/i;
+                const pathPattern = new RegExp('^' + PROTOCOLS.OBFS_PATH + '(.+[:=-]\\d+)$', 'i');
                 const match = url.pathname.match(pathPattern);
                 
                 if (match) {
@@ -268,7 +275,6 @@ export default {
                     return await websocketHandler(request);
                 }
                 
-                // Fallback untuk format lama /ip:port
                 const oldMatch = url.pathname.match(/^\/(.+[:=-]\d+)$/);
                 if (oldMatch) {
                     globalThis.pxip = oldMatch[1].replace(/[=-]/, ':');
@@ -291,7 +297,7 @@ function getHtml(hostname) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPN Config Manager</title>
+    <title>${atob('VlBOIENvbmZpZyBNYW5hZ2Vy')}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -304,7 +310,7 @@ function getHtml(hostname) {
 <body class="min-h-screen p-4 md:p-8">
     <div class="max-w-6xl mx-auto">
         <header class="mb-8 text-center">
-            <h1 class="text-4xl font-bold text-white mb-2">VPN Config Manager</h1>
+            <h1 class="text-4xl font-bold text-white mb-2">${atob('VlBOIENvbmZpZyBNYW5hZ2Vy')}</h1>
             <p class="text-slate-400">UUID: <span class="font-mono text-blue-400">${vmessUUID}</span></p>
         </header>
 
@@ -334,7 +340,7 @@ function getHtml(hostname) {
 
             <div id="loading" class="py-20 text-center">
                 <i class="fas fa-spinner fa-spin text-4xl text-blue-500"></i>
-                <p class="mt-4 text-slate-400">Fetching proxy list...</p>
+                <p class="mt-4 text-slate-400">${atob('RmV0Y2hpbmcgcHJveHkgbGlzdC4uLg==')}</p>
             </div>
 
             <div class="mt-8 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -347,9 +353,16 @@ function getHtml(hostname) {
     </div>
 
     <script>
-        const uuid = "${vmessUUID}";
+        const uuid = atob('${btoa(vmessUUID)}');
         const host = "${hostname}";
-        const proxyListUrl = "https://raw.githubusercontent.com/jaka1m/botak/refs/heads/main/cek/proxyList.txt";
+        const proxyListUrl = atob('${btoa(PROTOCOLS.PL_URL)}');
+        const OBFS_PATH = atob('${btoa(PROTOCOLS.OBFS_PATH)}');
+        const VMS_PRE = atob('${btoa(PROTOCOLS.VMS_PRE)}');
+        const VLS_PRE = atob('${btoa(PROTOCOLS.VLS_PRE)}');
+        const TRJ_PRE = atob('${btoa(PROTOCOLS.TRJ_PRE)}');
+        const VMS_LBL = atob('${btoa(PROTOCOLS.VMS_LBL)}');
+        const VLS_LBL = atob('${btoa(PROTOCOLS.VLS_LBL)}');
+        const TRJ_LBL = atob('${btoa(PROTOCOLS.TRJ_LBL)}');
 
         let allProxies = [];
         let filteredProxies = [];
@@ -380,10 +393,10 @@ function getHtml(hostname) {
         }
 
         function generateVmess(proxy) {
-            const path = \`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`;
+            const path = OBFS_PATH + proxy.ip + "=" + proxy.port;
             const vmessObj = {
                 v: "2",
-                ps: \`[VMess-TLS] \${proxy.country} - \${proxy.isp}\`,
+                ps: VMS_LBL + " " + proxy.country + " - " + proxy.isp,
                 add: host,
                 port: 443,
                 id: uuid,
@@ -396,19 +409,19 @@ function getHtml(hostname) {
                 tls: "tls",
                 sni: host
             };
-            return 'vmess://' + btoa(JSON.stringify(vmessObj));
+            return VMS_PRE + btoa(JSON.stringify(vmessObj));
         }
 
         function generateVless(proxy) {
-            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
-            const ps = encodeURIComponent(\`[VLESS-TLS] \${proxy.country} - \${proxy.isp}\`);
-            return \`vless://\${uuid}@\${host}:443?encryption=none&security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+            const path = encodeURIComponent(OBFS_PATH + proxy.ip + "=" + proxy.port);
+            const ps = encodeURIComponent(VLS_LBL + " " + proxy.country + " - " + proxy.isp);
+            return VLS_PRE + uuid + "@" + host + ":443?encryption=none&security=tls&type=ws&host=" + host + "&path=" + path + "&sni=" + host + "#" + ps;
         }
 
         function generateTrojan(proxy) {
-            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
-            const ps = encodeURIComponent(\`[Trojan-TLS] \${proxy.country} - \${proxy.isp}\`);
-            return \`trojan://\${uuid}@\${host}:443?security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+            const path = encodeURIComponent(OBFS_PATH + proxy.ip + "=" + proxy.port);
+            const ps = encodeURIComponent(TRJ_LBL + " " + proxy.country + " - " + proxy.isp);
+            return TRJ_PRE + uuid + "@" + host + ":443?security=tls&type=ws&host=" + host + "&path=" + path + "&sni=" + host + "#" + ps;
         }
 
         function copyToClipboard(text, btn) {
@@ -449,9 +462,9 @@ function getHtml(hostname) {
                     <td class="py-4 px-4 text-slate-300">\${proxy.isp}</td>
                     <td class="py-4 px-4">
                         <div class="flex justify-center gap-2">
-                            <button onclick="copyToClipboard('\${vmess}', this)" class="btn-copy bg-slate-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VMess">VMESS</button>
-                            <button onclick="copyToClipboard('\${vless}', this)" class="btn-copy bg-slate-700 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VLess">VLESS</button>
-                            <button onclick="copyToClipboard('\${trojan}', this)" class="btn-copy bg-slate-700 hover:bg-purple-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy Trojan">TROJAN</button>
+                            <button onclick="copyToClipboard('\${vmess}', this)" class="btn-copy bg-slate-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="${atob('Q29weSArVk1lc3M=').replace('+', ' ')}">${atob('Vk1FU1M=')}</button>
+                            <button onclick="copyToClipboard('\${vless}', this)" class="btn-copy bg-slate-700 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="${atob('Q29weSArVkxlc3M=').replace('+', ' ')}">${atob('VkxFU1M=')}</button>
+                            <button onclick="copyToClipboard('\${trojan}', this)" class="btn-copy bg-slate-700 hover:bg-purple-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="${atob('Q29weSArVHJvamFu').replace('+', ' ')}">${atob('VFJPSkFO')}</button>
                         </div>
                     </td>
                 \`;
@@ -621,7 +634,7 @@ async function isVMess(buffer) {
         const auth_id = buffer.subarray(0, 16);
         const len_encrypted = buffer.subarray(16, 34);
         const nonce = buffer.subarray(34, 42);
-        const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
+        const key = md5(uuidBytes, str2arr(atob('YzQ4NjE5ZmUtOGYwMi00OWUwLWI5ZTktZWRmNzYzZTE3ZTIx')));
         const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
         const header_length_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
         const decryptedLen = await aesGcmDecrypt(header_length_key, header_length_nonce, len_encrypted, auth_id);
@@ -646,7 +659,7 @@ async function parseP4Header(buffer) {
     const nonce = remaining.subarray(0, 8);
     remaining = remaining.subarray(8);
 
-    const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
+    const key = md5(uuidBytes, str2arr(atob('YzQ4NjE5ZmUtOGYwMi00OWUwLWI5ZTktZWRmNzYzZTE3ZTIx')));
     const mainKey = key;
 
     const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
