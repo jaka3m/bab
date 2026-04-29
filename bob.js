@@ -2,27 +2,32 @@ import { connect } from "cloudflare:sockets";
 
 const vmessUUID = "f282b878-8711-45a1-8c69-5564172123c1";
 let proxyList = [];
-let currentDomain = "";
 
 // Fetch proxy list dari GitHub (format: IP,Port,Country,ISP)
 async function fetchProxyList() {
     try {
         const response = await fetch('https://raw.githubusercontent.com/jaka1m/botak/refs/heads/main/cek/proxyList.txt');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const text = await response.text();
         
         // Parse format: IP,Port,Country,ISP
         proxyList = text.split('\n')
             .filter(line => line.trim() && line.includes(','))
             .map(line => {
-                const [ip, port, country, isp] = line.split(',');
+                const parts = line.split(',');
+                const ip = parts[0]?.trim() || '';
+                const port = parts[1]?.trim() || '';
+                const country = parts[2]?.trim() || 'Unknown';
+                const isp = parts[3]?.trim() || 'Unknown';
                 return {
-                    ip: ip.trim(),
-                    port: port.trim(),
-                    country: country?.trim() || 'Unknown',
-                    isp: isp?.trim() || 'Unknown',
-                    display: `${ip.trim()}:${port.trim()} (${country?.trim() || 'Unknown'} - ${isp?.trim() || 'Unknown'})`
+                    ip,
+                    port,
+                    country,
+                    isp,
+                    display: `${ip}:${port} (${country} - ${isp})`
                 };
-            });
+            })
+            .filter(p => p.ip && p.port);
         
         console.log(`Loaded ${proxyList.length} proxies`);
     } catch (error) {
@@ -31,7 +36,7 @@ async function fetchProxyList() {
     }
 }
 
-// Generate URL configurations dengan domain dinamis
+// Generate URL configurations
 function generateVMessURL(proxyIP, proxyPort, domain) {
     const config = {
         v: "2",
@@ -48,7 +53,11 @@ function generateVMessURL(proxyIP, proxyPort, domain) {
         sni: domain,
         scy: "zero"
     };
-    return "vmess://" + btoa(JSON.stringify(config));
+    try {
+        return "vmess://" + btoa(JSON.stringify(config));
+    } catch (e) {
+        return "Error generating VMess URL";
+    }
 }
 
 function generateVLESSURL(proxyIP, proxyPort, domain) {
@@ -75,439 +84,156 @@ function generateTrojanURL(proxyIP, proxyPort, domain) {
     return `trojan://${trojanPassword}@${domain}:443?${params.toString()}#${proxyIP}:${proxyPort}%20-%20Trojan-TLS`;
 }
 
-// HTML UI Component dengan domain dinamis
-function generateHTML(domain, proxyCount) {
+// HTML UI Component
+function generateHTML(domain) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPN Configuration Manager - ${domain}</title>
+    <title>VPN Config Manager - ${domain}</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .header {
-            text-align: center;
-            color: white;
-            margin-bottom: 30px;
-        }
-
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-
-        .domain-info {
-            background: rgba(255,255,255,0.2);
-            border-radius: 10px;
-            padding: 10px;
-            margin-top: 15px;
-            font-size: 0.9em;
-        }
-
-        .proxy-section {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-
-        .proxy-section h2 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }
-
-        .proxy-selector {
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        select {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        button {
-            padding: 12px 24px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        .stats {
-            margin-top: 15px;
-            padding: 10px;
-            background: #f0f0f0;
-            border-radius: 8px;
-            font-size: 14px;
-            color: #666;
-        }
-
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
-
-        .config-card {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            transition: transform 0.3s;
-        }
-
-        .config-card:hover {
-            transform: translateY(-5px);
-        }
-
-        .config-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f0f0f0;
-        }
-
-        .config-title {
-            font-size: 1.3em;
-            font-weight: bold;
-            color: #333;
-        }
-
-        .badge {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            font-weight: 600;
-        }
-
-        .badge-vmess { background: #4CAF50; color: white; }
-        .badge-vless { background: #2196F3; color: white; }
-        .badge-trojan { background: #FF9800; color: white; }
-
-        .url-container {
-            background: #f5f5f5;
-            border-radius: 8px;
-            padding: 12px;
-            margin: 15px 0;
-            word-break: break-all;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            max-height: 100px;
-            overflow-y: auto;
-        }
-
-        .copy-btn {
-            width: 100%;
-            padding: 10px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: background 0.3s;
-        }
-
-        .copy-btn:hover {
-            background: #45a049;
-        }
-
-        .copy-btn.copied {
-            background: #2196F3;
-        }
-
-        .status {
-            margin-top: 20px;
-            padding: 10px;
-            border-radius: 8px;
-            text-align: center;
-            font-size: 14px;
-        }
-
-        .status.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-
-        .status.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-
-        .status.info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-
-        @media (max-width: 768px) {
-            .config-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .proxy-selector {
-                flex-direction: column;
-            }
-            
-            select, button {
-                width: 100%;
-            }
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #1a73e8; margin-bottom: 10px; text-align: center; }
+        .info { background: #e8f0fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9em; line-height: 1.5; }
+        .section { margin-bottom: 25px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; margin-bottom: 10px; }
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
+        .btn-primary { background: #1a73e8; color: white; }
+        .btn-secondary { background: #5f6368; color: white; }
+        button:hover { opacity: 0.9; }
+        .config-card { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #fafafa; }
+        .config-card h3 { margin-bottom: 10px; font-size: 1.1em; display: flex; justify-content: space-between; align-items: center; }
+        .badge { font-size: 0.7em; padding: 4px 8px; border-radius: 4px; color: white; }
+        .badge-vmess { background: #34a853; }
+        .badge-vless { background: #4285f4; }
+        .badge-trojan { background: #fbbc05; }
+        .url-box { background: #eee; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; word-break: break-all; max-height: 80px; overflow-y: auto; margin-bottom: 10px; border: 1px solid #ddd; }
+        .copy-btn { width: auto; padding: 6px 12px; font-size: 12px; }
+        #status { text-align: center; margin-top: 20px; padding: 10px; border-radius: 6px; display: none; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🚀 VPN Configuration Manager</h1>
-            <p>Generate VMess, VLess, and Trojan configurations with proxy routing</p>
-            <div class="domain-info">
-                🌐 Server Domain: <strong>${domain}</strong><br>
-                📡 Path Format: <code>/Free-VPN-CF-Geo-Project/IP=PORT</code>
+        <h1>🚀 VPN Config Manager</h1>
+        <div class="info">
+            Domain: <strong>${domain}</strong><br>
+            Pilih proxy dari daftar di bawah untuk menghasilkan konfigurasi VMess, VLess, atau Trojan.
+        </div>
+
+        <div class="section">
+            <label for="proxySelect">Pilih Proxy Server:</label>
+            <select id="proxySelect">
+                <option value="">Memuat daftar proxy...</option>
+            </select>
+            <div class="btn-group">
+                <button class="btn-secondary" onclick="loadProxies()">🔄 Refresh Daftar</button>
             </div>
         </div>
 
-        <div class="proxy-section">
-            <h2>🌐 Select Proxy Server</h2>
-            <div class="proxy-selector">
-                <select id="proxySelect">
-                    <option value="">Loading proxies...</option>
-                </select>
-                <button onclick="refreshProxies()">🔄 Refresh Proxies</button>
-            </div>
-            <div class="stats" id="proxyStats"></div>
-        </div>
-
-        <div class="config-grid" id="configGrid">
+        <div id="configs" style="display: none;">
             <div class="config-card">
-                <div class="config-header">
-                    <span class="config-title">VMess Configuration</span>
-                    <span class="badge badge-vmess">VMess</span>
-                </div>
-                <div class="url-container" id="vmessUrl">Select a proxy to generate URL</div>
-                <button class="copy-btn" onclick="copyToClipboard('vmess')">📋 Copy VMess URL</button>
+                <h3>VMess <span class="badge badge-vmess">VMess</span></h3>
+                <div class="url-box" id="vmessUrl"></div>
+                <button class="btn-primary copy-btn" onclick="copyToClipboard('vmess', event)">📋 Salin VMess</button>
             </div>
-
             <div class="config-card">
-                <div class="config-header">
-                    <span class="config-title">VLess Configuration</span>
-                    <span class="badge badge-vless">VLess</span>
-                </div>
-                <div class="url-container" id="vlessUrl">Select a proxy to generate URL</div>
-                <button class="copy-btn" onclick="copyToClipboard('vless')">📋 Copy VLess URL</button>
+                <h3>VLess <span class="badge badge-vless">VLess</span></h3>
+                <div class="url-box" id="vlessUrl"></div>
+                <button class="btn-primary copy-btn" onclick="copyToClipboard('vless', event)">📋 Salin VLess</button>
             </div>
-
             <div class="config-card">
-                <div class="config-header">
-                    <span class="config-title">Trojan Configuration</span>
-                    <span class="badge badge-trojan">Trojan</span>
-                </div>
-                <div class="url-container" id="trojanUrl">Select a proxy to generate URL</div>
-                <button class="copy-btn" onclick="copyToClipboard('trojan')">📋 Copy Trojan URL</button>
+                <h3>Trojan <span class="badge badge-trojan">Trojan</span></h3>
+                <div class="url-box" id="trojanUrl"></div>
+                <button class="btn-primary copy-btn" onclick="copyToClipboard('trojan', event)">📋 Salin Trojan</button>
             </div>
         </div>
 
-        <div id="status" class="status" style="display: none;"></div>
+        <div id="status"></div>
     </div>
 
     <script>
-        let currentProxy = null;
-        let proxyList = [];
+        const proxySelect = document.getElementById('proxySelect');
+        const configsDiv = document.getElementById('configs');
         const currentDomain = window.location.hostname;
 
         async function loadProxies() {
-            const select = document.getElementById('proxySelect');
-            const statsDiv = document.getElementById('proxyStats');
-            
-            select.innerHTML = '<option value="">Loading proxies...</option>';
-            statsDiv.innerHTML = '<div class="loading">⏳ Fetching proxy list from GitHub...</div>';
-            
+            showStatus('Memuat daftar proxy...', '');
+            proxySelect.innerHTML = '<option value="">Memuat...</option>';
             try {
                 const response = await fetch('/api/proxies');
                 const proxies = await response.json();
-                proxyList = proxies;
-                
-                if (proxies.length === 0) {
-                    select.innerHTML = '<option value="">No proxies available</option>';
-                    statsDiv.innerHTML = '<div class="loading">❌ No proxies found in the list</div>';
-                    showStatus('No proxies found in the list', 'error');
-                } else {
-                    select.innerHTML = '<option value="">Select a proxy server...</option>';
-                    proxies.forEach(proxy => {
-                        const option = document.createElement('option');
-                        option.value = proxy.ip + ':' + proxy.port;
-                        option.textContent = proxy.display;
-                        select.appendChild(option);
-                    });
-                    
-                    statsDiv.innerHTML = '<div>✅ Loaded ' + proxies.length + ' proxies from GitHub</div>' +
-                        '<div>📝 Format: IP:PORT (Country - ISP)</div>' +
-                        '<div>🔗 Path: /Free-VPN-CF-Geo-Project/IP=PORT</div>';
-                    
-                    showStatus('Loaded ' + proxies.length + ' proxies successfully', 'success');
-                }
-            } catch (error) {
-                console.error('Failed to load proxies:', error);
-                select.innerHTML = '<option value="">Error loading proxies</option>';
-                statsDiv.innerHTML = '<div class="loading">❌ Failed to load proxy list</div>';
-                showStatus('Failed to load proxies', 'error');
+                proxySelect.innerHTML = '<option value="">-- Pilih Proxy --</option>';
+                proxies.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.ip + ':' + p.port;
+                    opt.textContent = p.display;
+                    proxySelect.appendChild(opt);
+                });
+                showStatus('Berhasil memuat ' + proxies.length + ' proxy', 'success');
+            } catch (e) {
+                showStatus('Gagal memuat proxy', 'error');
+                proxySelect.innerHTML = '<option value="">Gagal memuat daftar</option>';
             }
         }
 
-        async function refreshProxies() {
-            showStatus('Refreshing proxies...', 'info');
-            await loadProxies();
-        }
-
-        async function generateConfigs() {
-            const select = document.getElementById('proxySelect');
-            const proxyValue = select.value;
-            
-            if (!proxyValue) {
-                showStatus('Please select a proxy server first', 'error');
+        proxySelect.onchange = async () => {
+            const val = proxySelect.value;
+            if (!val) {
+                configsDiv.style.display = 'none';
                 return;
             }
-
-            const [proxyIP, proxyPort] = proxyValue.split(':');
-            currentProxy = { ip: proxyIP, port: proxyPort };
-            
-            showStatus('Generating configurations for ' + proxyIP + ':' + proxyPort + '...', 'info');
-            
+            const [ip, port] = val.split(':');
             try {
                 const response = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ proxyIP, proxyPort, domain: currentDomain })
+                    body: JSON.stringify({ proxyIP: ip, proxyPort: port, domain: currentDomain })
                 });
-                
-                const configs = await response.json();
-                
-                document.getElementById('vmessUrl').textContent = configs.vmess;
-                document.getElementById('vlessUrl').textContent = configs.vless;
-                document.getElementById('trojanUrl').textContent = configs.trojan;
-                
-                showStatus('Configurations generated successfully for ' + proxyIP + ':' + proxyPort + '!', 'success');
-            } catch (error) {
-                console.error('Failed to generate configs:', error);
-                showStatus('Failed to generate configurations', 'error');
+                const data = await response.json();
+                document.getElementById('vmessUrl').textContent = data.vmess;
+                document.getElementById('vlessUrl').textContent = data.vless;
+                document.getElementById('trojanUrl').textContent = data.trojan;
+                configsDiv.style.display = 'block';
+            } catch (e) {
+                showStatus('Gagal membuat konfigurasi', 'error');
             }
-        }
+        };
 
-        async function copyToClipboard(type) {
-            let url = '';
-            switch(type) {
-                case 'vmess':
-                    url = document.getElementById('vmessUrl').textContent;
-                    break;
-                case 'vless':
-                    url = document.getElementById('vlessUrl').textContent;
-                    break;
-                case 'trojan':
-                    url = document.getElementById('trojanUrl').textContent;
-                    break;
-            }
-            
-            if (!url || url === 'Select a proxy to generate URL') {
-                showStatus('Please generate configurations first', 'error');
-                return;
-            }
-            
+        async function copyToClipboard(id, event) {
+            const text = document.getElementById(id + 'Url').textContent;
             try {
-                await navigator.clipboard.writeText(url);
+                await navigator.clipboard.writeText(text);
                 const btn = event.target;
-                const originalText = btn.textContent;
-                btn.textContent = '✓ Copied!';
-                btn.classList.add('copied');
-                setTimeout(() => {
-                    btn.textContent = originalText;
-                    btn.classList.remove('copied');
-                }, 2000);
-                showStatus(type.toUpperCase() + ' URL copied to clipboard!', 'success');
+                const oldText = btn.textContent;
+                btn.textContent = '✅ Tersalin!';
+                setTimeout(() => btn.textContent = oldText, 2000);
             } catch (err) {
-                showStatus('Failed to copy to clipboard', 'error');
+                alert('Gagal menyalin');
             }
         }
 
-        function showStatus(message, type) {
-            const statusDiv = document.getElementById('status');
-            statusDiv.textContent = message;
-            statusDiv.className = 'status ' + type;
-            statusDiv.style.display = 'block';
-            setTimeout(() => {
-                statusDiv.style.display = 'none';
-            }, 3000);
+        function showStatus(msg, type) {
+            const s = document.getElementById('status');
+            s.textContent = msg;
+            s.className = type;
+            s.style.display = 'block';
+            if (type === 'success') setTimeout(() => s.style.display = 'none', 3000);
         }
 
-        document.getElementById('proxySelect').addEventListener('change', generateConfigs);
-        
-        // Load proxies on page load
         loadProxies();
     </script>
 </body>
 </html>`;
 }
 
+// Utility functions
 const str2arr = (str) => new TextEncoder().encode(str);
 const arr2str = (arr) => new TextDecoder().decode(arr);
 const concat = (...arrays) => {
@@ -525,6 +251,7 @@ const alloc = (size, fill = 0) => {
     return arr;
 };
 
+// VMess constants
 const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY = str2arr("VMess Header AEAD Key_Length");
 const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV = str2arr("VMess Header AEAD Nonce_Length");
 const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY = str2arr("VMess Header AEAD Key");
@@ -534,37 +261,17 @@ const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV = str2arr("AEAD Resp Header Len IV")
 const KDFSALT_CONST_AEAD_RESP_HEADER_KEY = str2arr("AEAD Resp Header Key");
 const KDFSALT_CONST_AEAD_RESP_HEADER_IV = str2arr("AEAD Resp Header IV");
 
-const WS_READY_STATE_OPEN = 1;
-const WS_READY_STATE_CLOSING = 2;
-const DNS_PORT = 53;
-
 const PROTOCOLS = {
-    P1: atob('VHJvamFu'),
-    P2: atob('VkxFU1M='),
-    P3: atob('U2hhZG93c29ja3M='),
-    P4: atob('Vk1lc3M=')
+    P1: 'Trojan',
+    P2: 'VLESS',
+    P3: 'Shadowsocks',
+    P4: 'VMess'
 };
 
-const DETECTION_PATTERNS = {
-    DELIMITER_P1: [0x0d, 0x0a],
-    DELIMITER_P1_CHECK: [0x01, 0x03, 0x7f],
-    UUID_V4_REGEX: /^\w{8}\w{4}4\w{3}[89ab]\w{3}\w{12}$/,
-    BUFFER_MIN_SIZE: 62,
-    DELIMITER_OFFSET: 56
-};
+const ADDRESS_TYPES = { IPV4: 1, DOMAIN: 2, IPV6: 3, DOMAIN_ALT: 3 };
+const COMMAND_TYPES = { TCP: 1, UDP: 2, UDP_ALT: 3 };
 
-const ADDRESS_TYPES = {
-    IPV4: 1,
-    DOMAIN: 2,
-    IPV6: 3,
-    DOMAIN_ALT: 3
-};
-const COMMAND_TYPES = {
-    TCP: 1,
-    UDP: 2,
-    UDP_ALT: 3
-};
-
+// Crypto functions
 function sha256(message) {
     const msg = message instanceof Uint8Array ? message : str2arr(message);
     const K = new Uint32Array([
@@ -602,23 +309,11 @@ function sha256(message) {
             const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
             const maj = (a & b) ^ (a & c) ^ (b & c);
             const T2 = (S0 + maj) >>> 0;
-            h = g;
-            g = f;
-            f = e;
-            e = (d + T1) >>> 0;
-            d = c;
-            c = b;
-            b = a;
-            a = (T1 + T2) >>> 0;
+            h = g; g = f; f = e; e = (d + T1) >>> 0;
+            d = c; c = b; b = a; a = (T1 + T2) >>> 0;
         }
-        H[0] = (H[0] + a) >>> 0;
-        H[1] = (H[1] + b) >>> 0;
-        H[2] = (H[2] + c) >>> 0;
-        H[3] = (H[3] + d) >>> 0;
-        H[4] = (H[4] + e) >>> 0;
-        H[5] = (H[5] + f) >>> 0;
-        H[6] = (H[6] + g) >>> 0;
-        H[7] = (H[7] + h) >>> 0;
+        H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+        H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
     }
     const result = new Uint8Array(32);
     const rv = new DataView(result.buffer);
@@ -628,10 +323,7 @@ function sha256(message) {
 
 function md5(data, salt) {
     let msg = data instanceof Uint8Array ? data : str2arr(data);
-    if (salt) {
-        const s = salt instanceof Uint8Array ? salt : str2arr(salt);
-        msg = concat(msg, s);
-    }
+    if (salt) msg = concat(msg, salt instanceof Uint8Array ? salt : str2arr(salt));
     const K = new Uint32Array([
         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
         0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
@@ -643,8 +335,7 @@ function md5(data, salt) {
         0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
     ]);
     const S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
-    ];
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
     let [a0, b0, c0, d0] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
     const len = msg.length;
     const paddingLen = ((56 - (len + 1) % 64) + 64) % 64;
@@ -661,53 +352,30 @@ function md5(data, salt) {
         let [A, B, C, D] = [a0, b0, c0, d0];
         for (let j = 0; j < 64; j++) {
             let F, g;
-            if (j < 16) {
-                F = (B & C) | (~B & D);
-                g = j;
-            } else if (j < 32) {
-                F = (D & B) | (~D & C);
-                g = (5 * j + 1) % 16;
-            } else if (j < 48) {
-                F = B ^ C ^ D;
-                g = (3 * j + 5) % 16;
-            } else {
-                F = C ^ (B | ~D);
-                g = (7 * j) % 16;
-            }
+            if (j < 16) { F = (B & C) | (~B & D); g = j; }
+            else if (j < 32) { F = (D & B) | (~D & C); g = (5 * j + 1) % 16; }
+            else if (j < 48) { F = B ^ C ^ D; g = (3 * j + 5) % 16; }
+            else { F = C ^ (B | ~D); g = (7 * j) % 16; }
             F = (F + A + K[j] + M[g]) >>> 0;
-            A = D;
-            D = C;
-            C = B;
-            B = (B + rotl(F, S[j])) >>> 0;
+            A = D; D = C; C = B; B = (B + rotl(F, S[j])) >>> 0;
         }
-        a0 = (a0 + A) >>> 0;
-        b0 = (b0 + B) >>> 0;
-        c0 = (c0 + C) >>> 0;
-        d0 = (d0 + D) >>> 0;
+        a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
     }
     const result = new Uint8Array(16);
     const rv = new DataView(result.buffer);
-    rv.setUint32(0, a0, true);
-    rv.setUint32(4, b0, true);
-    rv.setUint32(8, c0, true);
-    rv.setUint32(12, d0, true);
+    rv.setUint32(0, a0, true); rv.setUint32(4, b0, true); rv.setUint32(8, c0, true); rv.setUint32(12, d0, true);
     return result;
 }
 
 function createRecursiveHash(key, underlyingHashFn) {
-    const ipad = alloc(64, 0x36);
-    const opad = alloc(64, 0x5c);
+    const ipad = alloc(64, 0x36), opad = alloc(64, 0x5c);
     const keyBuf = key instanceof Uint8Array ? key : str2arr(key);
-    for (let i = 0; i < keyBuf.length; i++) {
-        ipad[i] ^= keyBuf[i];
-        opad[i] ^= keyBuf[i];
-    }
+    for (let i = 0; i < keyBuf.length; i++) { ipad[i] ^= keyBuf[i]; opad[i] ^= keyBuf[i]; }
     return (data) => underlyingHashFn(concat(opad, underlyingHashFn(concat(ipad, data))));
 }
 
 function kdf(key, path) {
-    let fn = sha256;
-    fn = createRecursiveHash(str2arr("VMess AEAD KDF"), fn);
+    let fn = createRecursiveHash(str2arr("VMess AEAD KDF"), sha256);
     for (const p of path) fn = createRecursiveHash(p, fn);
     return fn(key);
 }
@@ -720,112 +388,84 @@ function toBuffer(uuidStr) {
 }
 
 async function aesGcmDecrypt(key, iv, data, aad) {
-    const cryptoKey = await crypto.subtle.importKey('raw', key, {
-        name: 'AES-GCM'
-    }, false, ['decrypt']);
-    const decrypted = await crypto.subtle.decrypt({
-            name: 'AES-GCM',
-            iv,
-            additionalData: aad || new Uint8Array(0),
-            tagLength: 128
-        },
-        cryptoKey, data
-    );
-    return new Uint8Array(decrypted);
+    const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'AES-GCM' }, false, ['decrypt']);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad || new Uint8Array(0), tagLength: 128 }, cryptoKey, data));
 }
 
 async function aesGcmEncrypt(key, iv, data, aad) {
-    const cryptoKey = await crypto.subtle.importKey('raw', key, {
-        name: 'AES-GCM'
-    }, false, ['encrypt']);
-    const encrypted = await crypto.subtle.encrypt({
-            name: 'AES-GCM',
-            iv,
-            additionalData: aad || new Uint8Array(0),
-            tagLength: 128
-        },
-        cryptoKey, data
-    );
-    return new Uint8Array(encrypted);
+    const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'AES-GCM' }, false, ['encrypt']);
+    return new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad || new Uint8Array(0), tagLength: 128 }, cryptoKey, data));
 }
 
+// Main handler
 export default {
     async fetch(request, env, ctx) {
-        const url = new URL(request.url);
-        const domain = url.hostname;
-        
-        // API endpoint untuk mendapatkan daftar proxy
-        if (url.pathname === '/api/proxies') {
-            await fetchProxyList();
-            return new Response(JSON.stringify(proxyList), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-        
-        // API endpoint untuk generate konfigurasi
-        if (url.pathname === '/api/generate' && request.method === 'POST') {
-            const { proxyIP, proxyPort, domain: reqDomain } = await request.json();
-            const activeDomain = reqDomain || domain;
-            const configs = {
-                vmess: generateVMessURL(proxyIP, proxyPort, activeDomain),
-                vless: generateVLESSURL(proxyIP, proxyPort, activeDomain),
-                trojan: generateTrojanURL(proxyIP, proxyPort, activeDomain)
-            };
-            return new Response(JSON.stringify(configs), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-        
-        // WebSocket handler untuk koneksi proxy
-        const upgradeHeader = request.headers.get("Upgrade");
-        if (upgradeHeader === "websocket") {
-            // Path format: /Free-VPN-CF-Geo-Project/IP=PORT
-            const pathPattern = /^\/Free-VPN-CF-Geo-Project\/([^=]+)=(\d+)$/i;
-            const match = url.pathname.match(pathPattern);
-            
-            if (match) {
-                const proxyIP = match[1];
-                const proxyPort = match[2];
-                globalThis.pxip = `${proxyIP}:${proxyPort}`;
-                return await websocketHandler(request);
+        try {
+            const url = new URL(request.url);
+            const domain = url.hostname;
+
+            if (url.pathname === '/api/proxies') {
+                await fetchProxyList();
+                return new Response(JSON.stringify(proxyList), { headers: { 'Content-Type': 'application/json' } });
             }
-            
-            // Fallback untuk format lama
-            const oldMatch = url.pathname.match(/^\/(.+[:=-]\d+)$/);
-            if (oldMatch) {
-                globalThis.pxip = oldMatch[1].replace(/[=-]/, ':');
-                return await websocketHandler(request);
+
+            if (url.pathname === '/api/generate' && request.method === 'POST') {
+                const body = await request.json();
+                const { proxyIP, proxyPort, domain: reqDomain } = body;
+                const activeDomain = reqDomain || domain;
+                const configs = {
+                    vmess: generateVMessURL(proxyIP, proxyPort, activeDomain),
+                    vless: generateVLESSURL(proxyIP, proxyPort, activeDomain),
+                    trojan: generateTrojanURL(proxyIP, proxyPort, activeDomain)
+                };
+                return new Response(JSON.stringify(configs), { headers: { 'Content-Type': 'application/json' } });
             }
+
+            const upgradeHeader = request.headers.get("Upgrade");
+            if (upgradeHeader === "websocket") {
+                const pathPattern = /^\/Free-VPN-CF-Geo-Project\/([^=]+)=(\d+)$/i;
+                const match = url.pathname.match(pathPattern);
+                let proxyIP = "", proxyPort = "";
+
+                if (match) {
+                    proxyIP = match[1];
+                    proxyPort = match[2];
+                } else {
+                    const oldMatch = url.pathname.match(/^\/(.+[:=-]\d+)$/);
+                    if (oldMatch) {
+                        const parts = oldMatch[1].replace(/[=-]/, ':').split(':');
+                        proxyIP = parts[0];
+                        proxyPort = parts[1];
+                    }
+                }
+
+                if (proxyIP && proxyPort) {
+                    return await websocketHandler(request, proxyIP, proxyPort);
+                }
+            }
+
+            if (url.pathname === '/' || url.pathname === '') {
+                return new Response(generateHTML(domain), { headers: { 'Content-Type': 'text/html' } });
+            }
+
+            return new Response("Not Found", { status: 404 });
+        } catch (err) {
+            return new Response(`Internal Error: ${err.message}`, { status: 500 });
         }
-        
-        // Tampilkan UI untuk route root
-        if (url.pathname === '/' || url.pathname === '') {
-            return new Response(generateHTML(domain, proxyList.length), {
-                headers: { 'Content-Type': 'text/html' }
-            });
-        }
-        
-        return new Response("Not Found", { status: 404 });
     },
 };
 
-async function websocketHandler(request) {
+async function websocketHandler(request, proxyIP, proxyPort) {
     const webSocketPair = new WebSocketPair();
     const [client, webSocket] = Object.values(webSocketPair);
     webSocket.accept();
 
-    let addressLog = "",
-        portLog = "";
-    const log = (info, event) => console.log(`[${addressLog}:${portLog}] ${info}`, event || "");
-
     const earlyDataHeader = request.headers.get("sec-websocket-protocol") || "";
-    const readableWebSocketStream = createReadableWebSocketStream(webSocket, earlyDataHeader, log);
+    const log = (info) => console.log(`[${proxyIP}:${proxyPort}] ${info}`);
 
-    let remoteSocketWrapper = {
-        value: null
-    };
-    let udpStreamWrite = null,
-        isDNS = false;
+    const readableWebSocketStream = createReadableWebSocketStream(webSocket, earlyDataHeader, log);
+    let remoteSocketWrapper = { value: null };
+    let udpStreamWrite = null, isDNS = false;
 
     readableWebSocketStream.pipeTo(new WritableStream({
         async write(chunk, controller) {
@@ -838,67 +478,34 @@ async function websocketHandler(request) {
             }
 
             const bufferChunk = new Uint8Array(chunk);
-            const protocol = await detectProtocol(bufferChunk);
-            let protocolHeader;
-
-            if (protocol === PROTOCOLS.P1) protocolHeader = parseP1Header(bufferChunk);
-            else if (protocol === PROTOCOLS.P2) protocolHeader = parseP2Header(bufferChunk);
-            else if (protocol === PROTOCOLS.P4) protocolHeader = await parseP4Header(bufferChunk);
-            else if (protocol === PROTOCOLS.P3) protocolHeader = parseP3Header(bufferChunk);
-            else {
-                parseUnknownHeader(bufferChunk);
-                throw new Error("Unknown Protocol!");
-            }
-
-            addressLog = protocolHeader.addressRemote;
-            portLog = `${protocolHeader.portRemote} -> ${protocolHeader.isUDP ? "UDP" : "TCP"}`;
+            const protocolHeader = await parseProtocol(bufferChunk);
             if (protocolHeader.hasError) throw new Error(protocolHeader.message);
 
-            if (protocolHeader.isUDP) {
-                if (protocolHeader.portRemote === DNS_PORT) isDNS = true;
-                else throw new Error("UDP only support for DNS port 53");
-            }
-
-            if (isDNS) {
-                const {
-                    write
-                } = await handleUDPOutbound(webSocket, protocolHeader.version, log);
+            if (protocolHeader.isUDP && protocolHeader.portRemote === 53) {
+                isDNS = true;
+                const { write } = await handleUDPOutbound(webSocket, protocolHeader.version, log);
                 udpStreamWrite = write;
                 udpStreamWrite(protocolHeader.rawClientData);
                 return;
             }
 
-            handleTCPOutbound(remoteSocketWrapper, protocolHeader.addressRemote, protocolHeader.portRemote,
-                protocolHeader.rawClientData, webSocket, protocolHeader.version, log);
+            await handleTCPOutbound(remoteSocketWrapper, protocolHeader.addressRemote, protocolHeader.portRemote,
+                protocolHeader.rawClientData, webSocket, protocolHeader.version, proxyIP, proxyPort, log);
         },
-        close() {
-            log(`readableWebSocketStream closed`);
-        },
-        abort(reason) {
-            log(`readableWebSocketStream aborted`, JSON.stringify(reason));
-        },
-    })).catch((err) => log("pipeTo error", err));
+        close() { log(`WS closed`); },
+        abort(reason) { log(`WS aborted: ${reason}`); },
+    })).catch((err) => log(`Pipe error: ${err.message}`));
 
-    return new Response(null, {
-        status: 101,
-        webSocket: client
-    });
+    return new Response(null, { status: 101, webSocket: client });
 }
 
-async function detectProtocol(buffer) {
-    if (await isVMess(buffer)) return PROTOCOLS.P4;
-    if (buffer.byteLength >= DETECTION_PATTERNS.BUFFER_MIN_SIZE) {
-        const delimiter = buffer.slice(DETECTION_PATTERNS.DELIMITER_OFFSET, DETECTION_PATTERNS.DELIMITER_OFFSET + 4);
-        if (delimiter[0] === DETECTION_PATTERNS.DELIMITER_P1[0] && delimiter[1] === DETECTION_PATTERNS.DELIMITER_P1[1]) {
-            if (DETECTION_PATTERNS.DELIMITER_P1_CHECK.includes(delimiter[2]) &&
-                DETECTION_PATTERNS.DELIMITER_P1_CHECK.concat([0x04]).includes(delimiter[3])) return PROTOCOLS.P1;
-        }
-    }
+async function parseProtocol(buffer) {
+    // Basic detection logic
+    if (await isVMess(buffer)) return await parseVMessHeader(buffer);
+    if (buffer.length >= 62 && buffer[56] === 0x0d && buffer[57] === 0x0a) return parseTrojanHeader(buffer);
     const uuidCheck = buffer.slice(1, 17);
-    const hexString = arrayBufferToHex(uuidCheck.buffer);
-    if (DETECTION_PATTERNS.UUID_V4_REGEX.test(hexString)) return PROTOCOLS.P2;
-
-    return PROTOCOLS.P3;
+    if (/^\w{8}\w{4}4\w{3}[89ab]\w{3}\w{12}$/.test(arrayBufferToHex(uuidCheck.buffer))) return parseVlessHeader(buffer);
+    return { hasError: true, message: "Unknown Protocol" };
 }
 
 async function isVMess(buffer) {
@@ -909,422 +516,164 @@ async function isVMess(buffer) {
         const len_encrypted = buffer.subarray(16, 34);
         const nonce = buffer.subarray(34, 42);
         const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
-        const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
-        const header_length_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
-        const decryptedLen = await aesGcmDecrypt(header_length_key, header_length_nonce, len_encrypted, auth_id);
-        const header_length = (decryptedLen[0] << 8) | decryptedLen[1];
-        return header_length > 0 && header_length < 4096;
-    } catch (e) {
-        return false;
-    }
+        const h_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
+        const h_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
+        const decLen = await aesGcmDecrypt(h_key, h_nonce, len_encrypted, auth_id);
+        const len = (decLen[0] << 8) | decLen[1];
+        return len > 0 && len < 4096;
+    } catch (e) { return false; }
 }
 
-async function parseP4Header(buffer) {
+async function parseVMessHeader(buffer) {
     const uuidBytes = toBuffer(vmessUUID);
-    if (buffer.length < 16) throw new Error("Data too short for VMess AuthID");
     const auth_id = buffer.subarray(0, 16);
-    let remaining = buffer.subarray(16);
-
-    if (remaining.length < 18) throw new Error("Data too short for VMess LenEnc");
-    const len_encrypted = remaining.subarray(0, 18);
-    remaining = remaining.subarray(18);
-
-    if (remaining.length < 8) throw new Error("Data too short for VMess Nonce");
-    const nonce = remaining.subarray(0, 8);
-    remaining = remaining.subarray(8);
-
+    const len_encrypted = buffer.subarray(16, 34);
+    const nonce = buffer.subarray(34, 42);
     const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
-    const mainKey = key;
+    const h_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
+    const h_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
+    const decLen = await aesGcmDecrypt(h_key, h_nonce, len_encrypted, auth_id);
+    const h_len = (decLen[0] << 8) | decLen[1];
+    const cmd_encrypted = buffer.subarray(42, 42 + h_len + 16);
+    const rawClientData = buffer.subarray(42 + h_len + 16);
+    const p_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
+    const p_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV, auth_id, nonce]).subarray(0, 12);
+    const cmdBuf = await aesGcmDecrypt(p_key, p_nonce, cmd_encrypted, auth_id);
+    const port = (cmdBuf[38] << 8) | cmdBuf[39];
+    let address = "";
+    if (cmdBuf[40] === 1) address = cmdBuf.subarray(41, 45).join('.');
+    else if (cmdBuf[40] === 2) address = arr2str(cmdBuf.subarray(42, 42 + cmdBuf[41]));
 
-    const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
-    const header_length_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
+    const r_key = sha256(cmdBuf.subarray(17, 33)).subarray(0, 16);
+    const r_iv = sha256(cmdBuf.subarray(1, 17)).subarray(0, 16);
+    const enc_l = await aesGcmEncrypt(kdf(r_key, [KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY]).subarray(0, 16), kdf(r_iv, [KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV]).subarray(0, 12), new Uint8Array([0, 4]));
+    const enc_h = await aesGcmEncrypt(kdf(r_key, [KDFSALT_CONST_AEAD_RESP_HEADER_KEY]).subarray(0, 16), kdf(r_iv, [KDFSALT_CONST_AEAD_RESP_HEADER_IV]).subarray(0, 12), new Uint8Array([cmdBuf[33], 0, 0, 0]));
 
-    const decryptedLen = await aesGcmDecrypt(header_length_key, header_length_nonce, len_encrypted, auth_id);
-    const header_length = (decryptedLen[0] << 8) | decryptedLen[1];
-
-    if (remaining.length < header_length + 16) throw new Error("Data too short for VMess Cmd");
-    const cmd_encrypted = remaining.subarray(0, header_length + 16);
-    const rawClientData = remaining.subarray(header_length + 16);
-
-    const payload_key = kdf(mainKey, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
-    const payload_nonce = kdf(mainKey, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV, auth_id, nonce]).subarray(0, 12);
-    const cmdBuf = await aesGcmDecrypt(payload_key, payload_nonce, cmd_encrypted, auth_id);
-
-    if (cmdBuf[0] !== 1) throw new Error("Invalid VMess version");
-    const iv = cmdBuf.subarray(1, 17);
-    const keyResp = cmdBuf.subarray(17, 33);
-    const responseAuth = cmdBuf[33];
-    const command = cmdBuf[37];
-    const portRemote = (cmdBuf[38] << 8) | cmdBuf[39];
-    const addrType = cmdBuf[40];
-    let addrEnd = 41,
-        addressRemote = "";
-
-    if (addrType === 1) {
-        addressRemote = `${cmdBuf[41]}.${cmdBuf[42]}.${cmdBuf[43]}.${cmdBuf[44]}`;
-        addrEnd += 4;
-    } else if (addrType === 2) {
-        const len = cmdBuf[41];
-        addressRemote = arr2str(cmdBuf.subarray(42, 42 + len));
-        addrEnd += 1 + len;
-    } else if (addrType === 3) {
-        const parts = [];
-        for (let i = 0; i < 8; i++) parts.push(((cmdBuf[41 + i * 2] << 8) | cmdBuf[41 + i * 2 + 1]).toString(16));
-        addressRemote = parts.join(':');
-        addrEnd += 16;
-    }
-
-    const respKeyBase = sha256(keyResp).subarray(0, 16);
-    const respIvBase = sha256(iv).subarray(0, 16);
-
-    const length_key = kdf(respKeyBase, [KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY]).subarray(0, 16);
-    const length_iv = kdf(respIvBase, [KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV]).subarray(0, 12);
-    const encryptedLength = await aesGcmEncrypt(length_key, length_iv, new Uint8Array([0, 4]));
-
-    const payload_key_resp = kdf(respKeyBase, [KDFSALT_CONST_AEAD_RESP_HEADER_KEY]).subarray(0, 16);
-    const payload_iv_resp = kdf(respIvBase, [KDFSALT_CONST_AEAD_RESP_HEADER_IV]).subarray(0, 12);
-    const encryptedHeaderPayload = await aesGcmEncrypt(payload_key_resp, payload_iv_resp, new Uint8Array([responseAuth, 0, 0, 0]));
-
-    return {
-        hasError: false,
-        addressRemote,
-        portRemote,
-        rawClientData,
-        version: concat(encryptedLength, encryptedHeaderPayload),
-        isUDP: portRemote === DNS_PORT
-    };
+    return { hasError: false, addressRemote: address, portRemote: port, rawClientData, version: concat(enc_l, enc_h), isUDP: port === 53 };
 }
 
-function parseP3Header(buffer) {
-    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    const addressType = view.getUint8(0);
-    let addressLength = 0,
-        addressValueIndex = 1,
-        addressValue = "";
-
-    switch (addressType) {
-        case ADDRESS_TYPES.IPV4:
-            addressLength = 4;
-            addressValue = new Uint8Array(buffer.slice(addressValueIndex, addressValueIndex + addressLength)).join(".");
-            break;
-        case ADDRESS_TYPES.DOMAIN_ALT:
-            addressLength = buffer[addressValueIndex];
-            addressValueIndex += 1;
-            addressValue = arr2str(buffer.slice(addressValueIndex, addressValueIndex + addressLength));
-            break;
-        case ADDRESS_TYPES.IPV6:
-            addressLength = 16;
-            const dv = new DataView(buffer.slice(addressValueIndex, addressValueIndex + addressLength).buffer);
-            const ipv6 = [];
-            for (let i = 0; i < 8; i++) ipv6.push(dv.getUint16(i * 2).toString(16));
-            addressValue = ipv6.join(":");
-            break;
-        default:
-            return {
-                hasError: true, message: `Invalid addressType for P3: ${addressType}`
-            };
-    }
-    if (!addressValue) return {
-        hasError: true,
-        message: `Destination address empty`
-    };
-
-    const portIndex = addressValueIndex + addressLength;
-    const portBuffer = buffer.slice(portIndex, portIndex + 2);
-    const portRemote = new DataView(portBuffer.buffer, portBuffer.byteOffset, 2).getUint16(0);
-
-    return {
-        hasError: false,
-        addressRemote: addressValue,
-        addressType,
-        portRemote,
-        rawDataIndex: portIndex + 2,
-        rawClientData: buffer.slice(portIndex + 2),
-        version: null,
-        isUDP: portRemote == DNS_PORT
-    };
-}
-
-function parseP2Header(buffer) {
+function parseVlessHeader(buffer) {
     const version = buffer[0];
-    let isUDP = false;
     const optLength = buffer[17];
     const cmd = buffer[18 + optLength];
-
-    if (cmd === COMMAND_TYPES.TCP) {} else if (cmd === COMMAND_TYPES.UDP) isUDP = true;
-    else return {
-        hasError: true,
-        message: `Command ${cmd} not supported for P2`
-    };
-
-    const portIndex = 18 + optLength + 1;
-    const portBuffer = buffer.slice(portIndex, portIndex + 2);
-    const portRemote = new DataView(portBuffer.buffer, portBuffer.byteOffset, 2).getUint16(0);
-
-    let addressIndex = portIndex + 2;
-    const addressType = buffer[addressIndex];
-    let addressLength = 0,
-        addressValueIndex = addressIndex + 1,
-        addressValue = "";
-
-    switch (addressType) {
-        case ADDRESS_TYPES.IPV4:
-            addressLength = 4;
-            addressValue = new Uint8Array(buffer.slice(addressValueIndex, addressValueIndex + addressLength)).join(".");
-            break;
-        case ADDRESS_TYPES.DOMAIN:
-            addressLength = buffer[addressValueIndex];
-            addressValueIndex += 1;
-            addressValue = arr2str(buffer.slice(addressValueIndex, addressValueIndex + addressLength));
-            break;
-        case ADDRESS_TYPES.IPV6:
-            addressLength = 16;
-            const dv = new DataView(buffer.slice(addressValueIndex, addressValueIndex + addressLength).buffer);
-            const ipv6 = [];
-            for (let i = 0; i < 8; i++) ipv6.push(dv.getUint16(i * 2).toString(16));
-            addressValue = ipv6.join(":");
-            break;
-        default:
-            return {
-                hasError: true, message: `Invalid addressType: ${addressType}`
-            };
-    }
-    if (!addressValue) return {
-        hasError: true,
-        message: `addressValue is empty`
-    };
-
-    return {
-        hasError: false,
-        addressRemote: addressValue,
-        addressType,
-        portRemote,
-        rawDataIndex: addressValueIndex + addressLength,
-        rawClientData: buffer.slice(addressValueIndex + addressLength),
-        version: new Uint8Array([version, 0]),
-        isUDP
-    };
+    const isUDP = cmd === 2;
+    const port = (buffer[19 + optLength] << 8) | buffer[20 + optLength];
+    let address = "";
+    let addrIndex = 21 + optLength;
+    const addrType = buffer[addrIndex];
+    if (addrType === 1) { address = buffer.subarray(addrIndex + 1, addrIndex + 5).join('.'); addrIndex += 5; }
+    else if (addrType === 2) { const len = buffer[addrIndex + 1]; address = arr2str(buffer.subarray(addrIndex + 2, addrIndex + 2 + len)); addrIndex += 2 + len; }
+    return { hasError: false, addressRemote: address, portRemote: port, rawClientData: buffer.slice(addrIndex), version: new Uint8Array([version, 0]), isUDP };
 }
 
-function parseP1Header(buffer) {
-    const dataBuffer = buffer.slice(58);
-    if (dataBuffer.byteLength < 6) return {
-        hasError: true,
-        message: "Invalid request data for P1"
-    };
-
-    let isUDP = false;
-    const view = new DataView(dataBuffer.buffer, dataBuffer.byteOffset, dataBuffer.byteLength);
-    const cmd = view.getUint8(0);
-    if (cmd == COMMAND_TYPES.UDP_ALT) isUDP = true;
-    else if (cmd != COMMAND_TYPES.TCP) throw new Error("Unsupported command type for P1!");
-
-    let addressType = view.getUint8(1);
-    let addressLength = 0,
-        addressValueIndex = 2,
-        addressValue = "";
-
-    switch (addressType) {
-        case ADDRESS_TYPES.IPV4:
-            addressLength = 4;
-            addressValue = new Uint8Array(dataBuffer.slice(addressValueIndex, addressValueIndex + addressLength)).join(".");
-            break;
-        case ADDRESS_TYPES.DOMAIN_ALT:
-            addressLength = dataBuffer[addressValueIndex];
-            addressValueIndex += 1;
-            addressValue = arr2str(dataBuffer.slice(addressValueIndex, addressValueIndex + addressLength));
-            break;
-        case ADDRESS_TYPES.IPV6:
-            addressLength = 16;
-            const dv = new DataView(dataBuffer.slice(addressValueIndex, addressValueIndex + addressLength).buffer);
-            const ipv6 = [];
-            for (let i = 0; i < 8; i++) ipv6.push(dv.getUint16(i * 2).toString(16));
-            addressValue = ipv6.join(":");
-            break;
-        default:
-            return {
-                hasError: true, message: `Invalid addressType: ${addressType}`
-            };
-    }
-    if (!addressValue) return {
-        hasError: true,
-        message: `Address is empty`
-    };
-
-    const portIndex = addressValueIndex + addressLength;
-    const portBuffer = dataBuffer.slice(portIndex, portIndex + 2);
-    const portRemote = new DataView(portBuffer.buffer, portBuffer.byteOffset, 2).getUint16(0);
-
-    return {
-        hasError: false,
-        addressRemote: addressValue,
-        addressType,
-        portRemote,
-        rawDataIndex: portIndex + 4,
-        rawClientData: dataBuffer.slice(portIndex + 4),
-        version: null,
-        isUDP
-    };
+function parseTrojanHeader(buffer) {
+    const data = buffer.slice(58);
+    const cmd = data[0];
+    const isUDP = cmd === 3;
+    const addrType = data[1];
+    let address = "", addrIndex = 2;
+    if (addrType === 1) { address = data.subarray(2, 6).join('.'); addrIndex = 6; }
+    else if (addrType === 3) { const len = data[2]; address = arr2str(data.subarray(3, 3 + len)); addrIndex = 3 + len; }
+    const port = (data[addrIndex] << 8) | data[addrIndex + 1];
+    return { hasError: false, addressRemote: address, portRemote: port, rawClientData: data.slice(addrIndex + 4), version: null, isUDP };
 }
 
-async function remoteSocketToWS(remoteSocket, webSocket, responseHeader, retry, log) {
-    let header = responseHeader,
-        hasIncomingData = false;
-    await remoteSocket.readable.pipeTo(new WritableStream({
-        async write(chunk, controller) {
-            hasIncomingData = true;
-            if (webSocket.readyState !== WS_READY_STATE_OPEN) controller.error("webSocket closed");
-            if (header) {
-                webSocket.send(await new Blob([header, chunk]).arrayBuffer());
-                header = null;
-            } else webSocket.send(chunk);
-        },
-        close() {
-            log(`remoteConnection readable closed, hasData: ${hasIncomingData}`);
-        },
-        abort(reason) {
-            console.error(`remoteConnection abort`, reason);
-        },
-    })).catch((error) => {
-        console.error(`remoteSocketToWS error`, error.stack || error);
-        safeCloseWebSocket(webSocket);
-    });
-    if (!hasIncomingData && retry) {
-        log(`retrying`);
-        retry();
+async function handleTCPOutbound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, responseHeader, proxyIP, proxyPort, log) {
+    async function connectAndWrite(addr, port) {
+        try {
+            const socket = connect({ hostname: addr, port });
+            const writer = socket.writable.getWriter();
+            await writer.write(rawClientData);
+            writer.releaseLock();
+            return socket;
+        } catch (e) {
+            log(`Connect error: ${e.message}`);
+            return null;
+        }
     }
-}
 
-async function handleTCPOutbound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, responseHeader, log) {
-    async function connectAndWrite(address, port) {
-        const tcpSocket = connect({
-            hostname: address,
-            port
-        });
+    let tcpSocket = await connectAndWrite(addressRemote, portRemote);
+    if (!tcpSocket && proxyIP) {
+        log(`Retrying via proxy ${proxyIP}:${proxyPort}`);
+        tcpSocket = await connectAndWrite(proxyIP, parseInt(proxyPort));
+    }
+
+    if (tcpSocket) {
         remoteSocket.value = tcpSocket;
-        log(`connected to ${address}:${port}`);
-        const writer = tcpSocket.writable.getWriter();
-        await writer.write(rawClientData);
-        writer.releaseLock();
-        return tcpSocket;
+        let header = responseHeader;
+        tcpSocket.readable.pipeTo(new WritableStream({
+            write(chunk) {
+                if (header) {
+                    webSocket.send(concat(header, chunk));
+                    header = null;
+                } else webSocket.send(chunk);
+            },
+            close() { log(`Remote closed`); },
+            abort(e) { log(`Remote abort: ${e}`); }
+        })).catch(e => {
+            log(`Remote pipe error: ${e.message}`);
+            safeClose(webSocket);
+        });
+    } else {
+        safeClose(webSocket);
     }
-    async function retry() {
-        // Pemisahan IP dan Port dari globalThis.pxip (format ip:port)
-        const parts = globalThis.pxip?.split(':') || [];
-        const tcpSocket = await connectAndWrite(
-            parts[0] || addressRemote,
-            parseInt(parts[1]) || portRemote
-        );
-        tcpSocket.closed.catch(e => console.log("retry closed error", e)).finally(() => safeCloseWebSocket(webSocket));
-        remoteSocketToWS(tcpSocket, webSocket, responseHeader, null, log);
-    }
-    const tcpSocket = await connectAndWrite(addressRemote, portRemote);
-    remoteSocketToWS(tcpSocket, webSocket, responseHeader, retry, log);
-}
-
-function createReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
-    let readableStreamCancel = false;
-    return new ReadableStream({
-        start(controller) {
-            webSocketServer.addEventListener("message", (e) => {
-                if (!readableStreamCancel) controller.enqueue(e.data);
-            });
-            webSocketServer.addEventListener("close", () => {
-                safeCloseWebSocket(webSocketServer);
-                if (!readableStreamCancel) controller.close();
-            });
-            webSocketServer.addEventListener("error", (err) => {
-                log("ws error");
-                controller.error(err);
-            });
-            const {
-                earlyData,
-                error
-            } = base64ToArrayBuffer(earlyDataHeader);
-            if (error) controller.error(error);
-            else if (earlyData) controller.enqueue(earlyData);
-        },
-        cancel(reason) {
-            if (!readableStreamCancel) {
-                log(`Stream canceled: ${reason}`);
-                readableStreamCancel = true;
-                safeCloseWebSocket(webSocketServer);
-            }
-        },
-    });
-}
-
-function parseUnknownHeader(buffer) {}
-
-function base64ToArrayBuffer(base64Str) {
-    if (!base64Str) return {
-        error: null
-    };
-    try {
-        const decode = atob(base64Str.replace(/-/g, "+").replace(/_/g, "/"));
-        return {
-            earlyData: Uint8Array.from(decode, c => c.charCodeAt(0)).buffer,
-            error: null
-        };
-    } catch (error) {
-        return {
-            error
-        };
-    }
-}
-
-function arrayBufferToHex(buffer) {
-    return [...new Uint8Array(buffer)].map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
 async function handleUDPOutbound(webSocket, responseHeader, log) {
     let isHeaderSent = false;
     const transformStream = new TransformStream({
         transform(chunk, controller) {
-            for (let index = 0; index < chunk.byteLength;) {
-                const lengthBuffer = chunk.slice(index, index + 2);
-                const udpPacketLength = new DataView(lengthBuffer.buffer, lengthBuffer.byteOffset, 2).getUint16(0);
-                controller.enqueue(new Uint8Array(chunk.slice(index + 2, index + 2 + udpPacketLength)));
-                index += 2 + udpPacketLength;
+            for (let i = 0; i < chunk.byteLength;) {
+                const len = (chunk[i] << 8) | chunk[i+1];
+                controller.enqueue(chunk.slice(i + 2, i + 2 + len));
+                i += 2 + len;
             }
         },
     });
 
     transformStream.readable.pipeTo(new WritableStream({
         async write(chunk) {
-            const resp = await fetch("https://1.1.1.1/dns-query", {
-                method: "POST",
-                headers: {
-                    "content-type": "application/dns-message"
-                },
-                body: chunk
-            });
-            const dnsQueryResult = await resp.arrayBuffer();
-            const udpSize = dnsQueryResult.byteLength;
-            const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
-            if (webSocket.readyState === WS_READY_STATE_OPEN) {
-                log(`DoH success, DNS length: ${udpSize}`);
-                if (isHeaderSent) webSocket.send(await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-                else {
-                    webSocket.send(await new Blob([responseHeader, udpSizeBuffer, dnsQueryResult]).arrayBuffer());
+            try {
+                const resp = await fetch("https://1.1.1.1/dns-query", { method: "POST", headers: { "content-type": "application/dns-message" }, body: chunk });
+                const dns = await resp.arrayBuffer();
+                const udpLen = new Uint8Array([(dns.byteLength >> 8) & 0xff, dns.byteLength & 0xff]);
+                if (webSocket.readyState === 1) {
+                    const data = isHeaderSent ? concat(udpLen, new Uint8Array(dns)) : concat(responseHeader, udpLen, new Uint8Array(dns));
+                    webSocket.send(data);
                     isHeaderSent = true;
                 }
-            }
+            } catch (e) { log(`DNS error: ${e.message}`); }
         },
-    })).catch(e => log("DNS UDP error: " + e));
+    }));
 
     const writer = transformStream.writable.getWriter();
-    return {
-        write(chunk) {
-            writer.write(chunk);
-        }
-    };
+    return { write(chunk) { writer.write(chunk); } };
 }
 
-function safeCloseWebSocket(socket) {
+function createReadableWebSocketStream(webSocket, earlyDataHeader, log) {
+    return new ReadableStream({
+        start(controller) {
+            webSocket.addEventListener("message", (e) => controller.enqueue(e.data));
+            webSocket.addEventListener("close", () => { safeClose(webSocket); controller.close(); });
+            webSocket.addEventListener("error", (err) => controller.error(err));
+            const { earlyData } = base64ToArrayBuffer(earlyDataHeader);
+            if (earlyData) controller.enqueue(earlyData);
+        }
+    });
+}
+
+function base64ToArrayBuffer(base64Str) {
+    if (!base64Str) return { earlyData: null };
     try {
-        if (socket.readyState === WS_READY_STATE_OPEN || socket.readyState === WS_READY_STATE_CLOSING) socket.close();
-    } catch (e) {
-        console.error("safeCloseWebSocket error", e);
-    }
+        const decode = atob(base64Str.replace(/-/g, "+").replace(/_/g, "/"));
+        return { earlyData: Uint8Array.from(decode, c => c.charCodeAt(0)).buffer };
+    } catch (e) { return { earlyData: null }; }
+}
+
+function arrayBufferToHex(buffer) {
+    return [...new Uint8Array(buffer)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
+function safeClose(socket) {
+    try { if (socket.readyState < 2) socket.close(); } catch (e) {}
 }
