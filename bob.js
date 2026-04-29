@@ -269,12 +269,255 @@ export default {
                 }
             }
             
+            if (url.pathname === "/") {
+                return new Response(getHtml(url.hostname), {
+                    headers: { "Content-Type": "text/html;charset=UTF-8" },
+                });
+            }
+
             return new Response("Not Found", { status: 404 });
         } catch (err) {
             return new Response(`Error: ${err.toString()}`, { status: 500 });
         }
     },
 };
+
+function getHtml(hostname) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN Config Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .btn-copy { transition: all 0.2s; }
+        .btn-copy:active { transform: scale(0.95); }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-8 text-center">
+            <h1 class="text-4xl font-bold text-white mb-2">VPN Config Manager</h1>
+            <p class="text-slate-400">UUID: <span class="font-mono text-blue-400">${vmessUUID}</span></p>
+        </header>
+
+        <div class="glass rounded-2xl p-6 mb-8">
+            <div class="flex flex-col md:flex-row gap-4 mb-6">
+                <div class="relative flex-grow">
+                    <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                    <input type="text" id="searchInput" placeholder="Search by Country or ISP (e.g. SG, Oracle)..."
+                        class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white">
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-400">
+                            <th class="pb-4 px-4">Location</th>
+                            <th class="pb-4 px-4">ISP</th>
+                            <th class="pb-4 px-4 text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="proxyTableBody">
+                        <!-- Data will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="loading" class="py-20 text-center">
+                <i class="fas fa-spinner fa-spin text-4xl text-blue-500"></i>
+                <p class="mt-4 text-slate-400">Fetching proxy list...</p>
+            </div>
+
+            <div class="mt-8 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div id="paginationInfo" class="text-slate-400 text-sm"></div>
+                <div class="flex gap-2" id="paginationControls">
+                    <!-- Pagination buttons -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const uuid = "${vmessUUID}";
+        const host = "${hostname}";
+        const proxyListUrl = "https://raw.githubusercontent.com/jaka1m/botak/refs/heads/main/cek/proxyList.txt";
+
+        let allProxies = [];
+        let filteredProxies = [];
+        let currentPage = 1;
+        const itemsPerPage = 10;
+
+        async function fetchProxies() {
+            try {
+                const response = await fetch(proxyListUrl);
+                const text = await response.text();
+                const lines = text.trim().split('\\n');
+
+                allProxies = lines.map(line => {
+                    const [ip, port, country, isp] = line.split(',');
+                    return { ip, port, country, isp };
+                }).filter(p => p.ip && p.port);
+
+                filteredProxies = [...allProxies];
+                renderTable();
+                document.getElementById('loading').classList.add('hidden');
+            } catch (error) {
+                console.error('Error fetching proxies:', error);
+                document.getElementById('loading').innerHTML = \`
+                    <i class="fas fa-exclamation-triangle text-red-500 text-4xl"></i>
+                    <p class="mt-4 text-red-400">Failed to load proxy list. Please try again later.</p>
+                \`;
+            }
+        }
+
+        function generateVmess(proxy) {
+            const path = \`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`;
+            const vmessObj = {
+                v: "2",
+                ps: \`[VMess-TLS] \${proxy.country} - \${proxy.isp}\`,
+                add: host,
+                port: 443,
+                id: uuid,
+                aid: "0",
+                scy: "zero",
+                net: "ws",
+                type: "none",
+                host: host,
+                path: path,
+                tls: "tls",
+                sni: host
+            };
+            return 'vmess://' + btoa(JSON.stringify(vmessObj));
+        }
+
+        function generateVless(proxy) {
+            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
+            const ps = encodeURIComponent(\`[VLESS-TLS] \${proxy.country} - \${proxy.isp}\`);
+            return \`vless://\${uuid}@\${host}:443?encryption=none&security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+        }
+
+        function generateTrojan(proxy) {
+            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
+            const ps = encodeURIComponent(\`[Trojan-TLS] \${proxy.country} - \${proxy.isp}\`);
+            return \`trojan://\${uuid}@\${host}:443?security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+        }
+
+        function copyToClipboard(text, btn) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalHtml = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check"></i>';
+                btn.classList.replace('bg-slate-700', 'bg-green-600');
+                setTimeout(() => {
+                    btn.innerHTML = originalHtml;
+                    btn.classList.replace('bg-green-600', 'bg-slate-700');
+                }, 1000);
+            });
+        }
+
+        function renderTable() {
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pagedProxies = filteredProxies.slice(start, end);
+
+            const tbody = document.getElementById('proxyTableBody');
+            tbody.innerHTML = '';
+
+            pagedProxies.forEach(proxy => {
+                const tr = document.createElement('tr');
+                tr.className = "border-b border-slate-800 hover:bg-slate-800/30 transition-colors";
+
+                const vmess = generateVmess(proxy);
+                const vless = generateVless(proxy);
+                const trojan = generateTrojan(proxy);
+
+                tr.innerHTML = \`
+                    <td class="py-4 px-4">
+                        <div class="flex items-center gap-3">
+                            <span class="text-2xl">\${getFlagEmoji(proxy.country)}</span>
+                            <span class="font-medium">\${proxy.country}</span>
+                        </div>
+                    </td>
+                    <td class="py-4 px-4 text-slate-300">\${proxy.isp}</td>
+                    <td class="py-4 px-4">
+                        <div class="flex justify-center gap-2">
+                            <button onclick="copyToClipboard('\${vmess}', this)" class="btn-copy bg-slate-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VMess">VMESS</button>
+                            <button onclick="copyToClipboard('\${vless}', this)" class="btn-copy bg-slate-700 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VLess">VLESS</button>
+                            <button onclick="copyToClipboard('\${trojan}', this)" class="btn-copy bg-slate-700 hover:bg-purple-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy Trojan">TROJAN</button>
+                        </div>
+                    </td>
+                \`;
+                tbody.appendChild(tr);
+            });
+
+            updatePagination();
+        }
+
+        function updatePagination() {
+            const totalPages = Math.ceil(filteredProxies.length / itemsPerPage);
+            const info = document.getElementById('paginationInfo');
+            info.innerText = \`Showing \${Math.min(filteredProxies.length, (currentPage-1)*itemsPerPage + 1)} to \${Math.min(filteredProxies.length, currentPage*itemsPerPage)} of \${filteredProxies.length} proxies\`;
+
+            const controls = document.getElementById('paginationControls');
+            controls.innerHTML = '';
+
+            if (totalPages <= 1) return;
+
+            const prevBtn = document.createElement('button');
+            prevBtn.className = \`px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition \${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}\`;
+            prevBtn.innerText = 'Prev';
+            prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderTable(); } };
+            controls.appendChild(prevBtn);
+
+            // Limited page numbers
+            let startPage = Math.max(1, currentPage - 1);
+            let endPage = Math.min(totalPages, startPage + 2);
+            if (endPage - startPage < 2) startPage = Math.max(1, endPage - 2);
+
+            for (let i = startPage; i <= endPage; i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.className = \`w-10 h-10 rounded-lg transition \${currentPage === i ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-400'}\`;
+                pageBtn.innerText = i;
+                pageBtn.onclick = () => { currentPage = i; renderTable(); };
+                controls.appendChild(pageBtn);
+            }
+
+            const nextBtn = document.createElement('button');
+            nextBtn.className = \`px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition \${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}\`;
+            nextBtn.innerText = 'Next';
+            nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; renderTable(); } };
+            controls.appendChild(nextBtn);
+        }
+
+        function getFlagEmoji(countryCode) {
+            if (!countryCode || countryCode.length !== 2) return '🌐';
+            const codePoints = countryCode
+                .toUpperCase()
+                .split('')
+                .map(char => 127397 + char.charCodeAt());
+            return String.fromCodePoint(...codePoints);
+        }
+
+        document.getElementById('searchInput').oninput = (e) => {
+            const query = e.target.value.toLowerCase();
+            filteredProxies = allProxies.filter(p =>
+                p.country.toLowerCase().includes(query) ||
+                p.isp.toLowerCase().includes(query)
+            );
+            currentPage = 1;
+            renderTable();
+        };
+
+        fetchProxies();
+    </script>
+</body>
+</html>`;
+}
 
 async function websocketHandler(request) {
     const webSocketPair = new WebSocketPair();
