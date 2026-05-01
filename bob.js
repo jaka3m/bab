@@ -1,6 +1,6 @@
 import { connect } from "cloudflare:sockets";
 
-const vmessUUID = "f282b878-8711-45a1-8c69-5564172123c1";
+const vmessUUID = atob('ZjI4MmI4NzgtODcxMS00NWExLThjNjktNTU2NDE3MjEyM2Mx');
 
 const str2arr = (str) => new TextEncoder().encode(str);
 const arr2str = (arr) => new TextDecoder().decode(arr);
@@ -19,14 +19,14 @@ const alloc = (size, fill = 0) => {
     return arr;
 };
 
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY = str2arr("VMess Header AEAD Key_Length");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV = str2arr("VMess Header AEAD Nonce_Length");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY = str2arr("VMess Header AEAD Key");
-const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV = str2arr("VMess Header AEAD Nonce");
-const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY = str2arr("AEAD Resp Header Len Key");
-const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV = str2arr("AEAD Resp Header Len IV");
-const KDFSALT_CONST_AEAD_RESP_HEADER_KEY = str2arr("AEAD Resp Header Key");
-const KDFSALT_CONST_AEAD_RESP_HEADER_IV = str2arr("AEAD Resp Header IV");
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgS2V5X0xlbmd0aA=='));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgTm9uY2VfTGVuZ3Ro'));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_KEY = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgS2V5'));
+const KDFSALT_CONST_VMESS_HEADER_PAYLOAD_AEAD_IV = str2arr(atob('Vk1lc3MgSGVhZGVyIEFFQUQgTm9uY2U='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_KEY = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBMZW4gS2V5'));
+const KDFSALT_CONST_AEAD_RESP_HEADER_LEN_IV = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBMZW4gSVY='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_KEY = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBLZXk='));
+const KDFSALT_CONST_AEAD_RESP_HEADER_IV = str2arr(atob('QUVBRCBSZXNwIEhlYWRlciBJVg=='));
 
 const WS_READY_STATE_OPEN = 1;
 const WS_READY_STATE_CLOSING = 2;
@@ -36,7 +36,15 @@ const PROTOCOLS = {
     P1: atob('VHJvamFu'),
     P2: atob('VkxFU1M='),
     P3: atob('U2hhZG93c29ja3M='),
-    P4: atob('Vk1lc3M=')
+    P4: atob('Vk1lc3M='),
+    OBFS_PATH: atob('L0ZyZWUtVlBOLUNGLUdlby1Qcm9qZWN0Lw=='),
+    VMS_PRE: atob('dm1lc3M6Ly8='),
+    VLS_PRE: atob('dmxlc3M6Ly8='),
+    TRJ_PRE: atob('dHJvamFuOi8v'),
+    VMS_LBL: atob('W1ZNZXNzLVRMU10='),
+    VLS_LBL: atob('W1ZMRVNTLVRMU10='),
+    TRJ_LBL: atob('W1Ryb2phbi1UTFNd'),
+    PL_URL: atob('aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2pha2ExbS9ib3Rhay9yZWZzL2hlYWRzL21haW4vY2VrL3Byb3h5TGlzdC50eHQ=')
 };
 
 const DETECTION_PATTERNS = {
@@ -201,7 +209,7 @@ function createRecursiveHash(key, underlyingHashFn) {
 
 function kdf(key, path) {
     let fn = sha256;
-    fn = createRecursiveHash(str2arr("VMess AEAD KDF"), fn);
+    fn = createRecursiveHash(str2arr(atob('Vk1lc3MgQUVBRCBLREY=')), fn);
     for (const p of path) fn = createRecursiveHash(p, fn);
     return fn(key);
 }
@@ -259,8 +267,7 @@ export default {
 
             // 2. Logika WebSocket
             if (upgradeHeader === "websocket") {
-                // Perbaikan format path untuk mencocokkan /Free-VPN-CF-Geo-Project/ip=port
-                const pathPattern = /^\/Free-VPN-CF-Geo-Project\/(.+[:=-]\d+)$/i;
+                const pathPattern = new RegExp('^' + PROTOCOLS.OBFS_PATH + '(.+[:=-]\\d+)$', 'i');
                 const match = url.pathname.match(pathPattern);
                 
                 if (match) {
@@ -268,7 +275,6 @@ export default {
                     return await websocketHandler(request);
                 }
                 
-                // Fallback untuk format lama /ip:port
                 const oldMatch = url.pathname.match(/^\/(.+[:=-]\d+)$/);
                 if (oldMatch) {
                     globalThis.pxip = oldMatch[1].replace(/[=-]/, ':');
@@ -284,234 +290,537 @@ export default {
     },
 };
 
-
 function getHtml(hostname) {
-    return `<!DOCTYPE html>
-<html lang="en">
+    return `
+<!DOCTYPE html>
+<html lang="en" id="htmlRoot">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPN Config Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>${atob('VlBOIENvbmZpZyBNYW5hZ2Vy')}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { background-color: #0f172a; color: #e2e8f0; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .btn-copy { transition: all 0.2s; }
-        .btn-copy:active { transform: scale(0.95); }
+        /* Custom styles untuk efek blur dan transisi */
+        * {
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .cloud-blur {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+            animation: floatCloud 20s ease-in-out infinite;
+        }
+        
+        @keyframes floatCloud {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -30px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            color: #f1f5f9;
+        }
+        
+        body.light {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            color: #0f172a;
+        }
+        
+        body.light .glass-deep {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .glass-deep {
+            background: rgba(15, 23, 42, 0.5);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Dropdown Styling */
+        .dropdown-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 0.5rem;
+            width: 220px;
+            z-index: 50;
+            background: rgba(30, 41, 59, 0.95);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        body.light .dropdown-menu {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .dropdown-menu.show {
+            display: block;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .action-btn { transition: all 0.2s ease; }
+        .action-btn:active { transform: scale(0.95); }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        .status-active {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        
+        .status-inactive {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        
+        .status-checking {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+        
+        .tooltip {
+            position: relative;
+            cursor: help;
+        }
+        
+        .tooltip:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            white-space: nowrap;
+            z-index: 100;
+            margin-bottom: 5px;
+        }
     </style>
 </head>
-<body class="min-h-screen p-4 md:p-8">
-    <div class="max-w-6xl mx-auto">
-        <header class="mb-8 text-center">
-            <h1 class="text-4xl font-bold text-white mb-2">VPN Config Manager</h1>
-            <p class="text-slate-400">UUID: <span class="font-mono text-blue-400">${vmessUUID}</span></p>
-        </header>
+<body class="min-h-screen py-4 md:py-8 px-3 md:px-6 relative transition-colors duration-300">
+    
+    <div class="cloud-blur w-[500px] h-[500px] top-[-150px] left-[-150px]" style="background: radial-gradient(circle, rgba(59,130,246,0.4) 0%, rgba(139,92,246,0.2) 100%);"></div>
+    <div class="cloud-blur w-[600px] h-[600px] bottom-[-200px] right-[-200px]" style="background: radial-gradient(circle, rgba(6,182,212,0.3) 0%, rgba(59,130,246,0.15) 100%);"></div>
 
-        <div class="glass rounded-2xl p-6 mb-8">
-            <div class="flex flex-col md:flex-row gap-4 mb-6">
-                <div class="relative flex-grow">
-                    <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
-                    <input type="text" id="searchInput" placeholder="Search by Country or ISP (e.g. SG, Oracle)..."
-                        class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white">
+    <div class="max-w-7xl mx-auto relative z-10">
+        
+        <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+            <div class="text-center md:text-left">
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass-deep text-xs font-semibold mb-3" style="color: #60a5fa;">
+                    <i class="fas fa-shield-alt text-[10px]"></i> 
+                    <span>NETWORK SECURE</span>
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse ml-1"></span>
+                </div>
+                <h1 class="text-3xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-blue-400 via-cyan-400 to-purple-400 bg-clip-text text-transparent">
+                    ${atob('VlBOIENvbmZpZyBNYW5hZ2Vy')}
+                </h1>
+            </div>
+            <button id="themeToggle" class="fixed top-4 right-4 z-50 w-10 h-10 rounded-full glass-deep flex items-center justify-center text-lg hover:scale-110 transition-all">
+                <i class="fas fa-moon"></i>
+            </button>
+        </div>
+
+        <div class="glass-deep rounded-2xl overflow-hidden shadow-2xl">
+            <div class="p-4 md:p-6 border-b" style="border-color: rgba(255,255,255,0.1);">
+                <div class="relative group">
+                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                        <i class="fas fa-search text-slate-500 group-focus-within:text-blue-400 transition-colors"></i>
+                    </div>
+                    <input type="text" id="searchInput" 
+                        placeholder="Search country or ISP..."
+                        class="w-full bg-white/10 backdrop-blur-sm border rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 transition-all">
                 </div>
             </div>
 
-            <div class="overflow-x-auto">
-                <table class="w-full text-left">
+            <div class="overflow-x-auto p-2 md:p-4">
+                <table class="w-full border-collapse">
                     <thead>
-                        <tr class="border-b border-slate-700 text-slate-400">
-                            <th class="pb-4 px-4">Location</th>
-                            <th class="pb-4 px-4">ISP</th>
-                            <th class="pb-4 px-4 text-center">Actions</th>
+                        <tr class="border-b" style="border-color: rgba(255,255,255,0.05);">
+                            <th class="py-4 px-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Location</th>
+                            <th class="py-4 px-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Provider</th>
+                            <th class="py-4 px-4 text-center text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
+                            <th class="py-4 px-4 text-right text-xs font-semibold uppercase tracking-wider text-slate-400">Action</th>
                         </tr>
                     </thead>
-                    <tbody id="proxyTableBody">
-                        <!-- Data will be loaded here -->
-                    </tbody>
+                    <tbody id="proxyTableBody"></tbody>
                 </table>
             </div>
 
-            <div id="loading" class="py-20 text-center">
-                <i class="fas fa-spinner fa-spin text-4xl text-blue-500"></i>
-                <p class="mt-4 text-slate-400">Fetching proxy list...</p>
+            <div id="loading" class="py-24 text-center flex flex-col items-center gap-4">
+                <div class="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="text-slate-400 text-sm">${atob('RmV0Y2hpbmcgcHJveHkgbGlzdC4uLg==')}</p>
             </div>
 
-            <div class="mt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-                <div id="paginationInfo" class="text-slate-400 text-sm"></div>
-                <div class="flex gap-2" id="paginationControls">
-                    <!-- Pagination buttons -->
-                </div>
+            <div class="p-4 md:p-6 border-t flex flex-col md:flex-row justify-between items-center gap-4" style="border-color: rgba(255,255,255,0.1);">
+                <div id="paginationInfo" class="text-slate-400 text-xs font-mono"></div>
+                <div class="flex gap-3 items-center" id="paginationControls"></div>
             </div>
         </div>
     </div>
 
     <script>
-        const uuid = "${vmessUUID}";
+        const themeToggleBtn = document.getElementById('themeToggle');
+        const bodyElement = document.body;
+        
+        themeToggleBtn.addEventListener('click', () => {
+            bodyElement.classList.toggle('light');
+            const isLight = bodyElement.classList.contains('light');
+            themeToggleBtn.innerHTML = isLight ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+        });
+
+        if (localStorage.getItem('theme') === 'light') {
+            bodyElement.classList.add('light');
+            themeToggleBtn.innerHTML = '<i class="fas fa-sun"></i>';
+        }
+
+        const uuid = atob('${btoa(vmessUUID)}');
         const host = "${hostname}";
-        const proxyListUrl = "https://raw.githubusercontent.com/jaka1m/botak/refs/heads/main/cek/proxyList.txt";
+        const proxyListUrl = atob('${btoa(PROTOCOLS.PL_URL)}');
+        const OBFS_PATH = atob('${btoa(PROTOCOLS.OBFS_PATH)}');
+        const VMS_PRE = atob('${btoa(PROTOCOLS.VMS_PRE)}');
+        const VLS_PRE = atob('${btoa(PROTOCOLS.VLS_PRE)}');
+        const TRJ_PRE = atob('${btoa(PROTOCOLS.TRJ_PRE)}');
+        const VMS_LBL = atob('${btoa(PROTOCOLS.VMS_LBL)}');
+        const VLS_LBL = atob('${btoa(PROTOCOLS.VLS_LBL)}');
+        const TRJ_LBL = atob('${btoa(PROTOCOLS.TRJ_LBL)}');
+        const SS_LBL = atob('${btoa(PROTOCOLS.SS_LBL)}');
+        
+        // API URL untuk cek status proxy (diencode dengan atob)
+        const CHECK_API_URL = atob('aHR0cHM6Ly9jaGVjay5qYWsuYml6LmlkL2NoZWNr');
+
+        // Auto-detect semua negara menggunakan Intl.DisplayNames (built-in JavaScript)
+        const countryNameFormatter = new Intl.DisplayNames(['en'], { type: 'region' });
+        
+        function getCountryFullName(countryCode) {
+            if (!countryCode) return 'Unknown';
+            try {
+                const upperCode = countryCode.toUpperCase();
+                const fullName = countryNameFormatter.of(upperCode);
+                return fullName || countryCode;
+            } catch (error) {
+                return countryCode;
+            }
+        }
 
         let allProxies = [];
         let filteredProxies = [];
         let currentPage = 1;
         const itemsPerPage = 10;
+        
+        // Cache untuk menyimpan hasil pengecekan status proxy
+        let statusCache = new Map();
+
+        async function checkProxyStatus(ip, port) {
+            const cacheKey = \`\${ip}:\${port}\`;
+            
+            // Cek cache dulu
+            if (statusCache.has(cacheKey)) {
+                return statusCache.get(cacheKey);
+            }
+            
+            try {
+                const apiUrl = \`\${CHECK_API_URL}?ip=\${ip}:\${port}\`;
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                
+                const result = {
+                    status: data.status || 'UNKNOWN',
+                    delay: data.delay || 'N/A',
+                    speed: data.speed_est || 'N/A',
+                    isp: data.isp || '',
+                    country: data.country || '',
+                    asn: data.asn || '',
+                    colo: data.colo || ''
+                };
+                
+                // Simpan ke cache
+                statusCache.set(cacheKey, result);
+                return result;
+            } catch (error) {
+                console.error('Error checking proxy:', error);
+                const errorResult = { status: 'ERROR', delay: 'N/A', speed: 'N/A' };
+                statusCache.set(cacheKey, errorResult);
+                return errorResult;
+            }
+        }
 
         async function fetchProxies() {
             try {
                 const response = await fetch(proxyListUrl);
                 const text = await response.text();
                 const lines = text.trim().split('\\n');
-
                 allProxies = lines.map(line => {
                     const [ip, port, country, isp] = line.split(',');
-                    return { ip, port, country, isp };
+                    return { 
+                        ip, 
+                        port, 
+                        country: getCountryFullName(country), 
+                        isp, 
+                        countryCode: country,
+                        status: null,
+                        delay: null,
+                        speed: null
+                    };
                 }).filter(p => p.ip && p.port);
-
                 filteredProxies = [...allProxies];
                 renderTable();
                 document.getElementById('loading').classList.add('hidden');
+                
+                // Mulai pengecekan status untuk semua proxy
+                checkAllProxyStatuses();
             } catch (error) {
-                console.error('Error fetching proxies:', error);
-                document.getElementById('loading').innerHTML = \`
-                    <i class="fas fa-exclamation-triangle text-red-500 text-4xl"></i>
-                    <p class="mt-4 text-red-400">Failed to load proxy list. Please try again later.</p>
-                \`;
+                console.error('Error:', error);
+            }
+        }
+        
+        async function checkAllProxyStatuses() {
+            // Pengecekan status untuk semua proxy secara paralel dengan batasan
+            const batchSize = 5; // Cek 5 proxy sekaligus untuk menghindari rate limit
+            for (let i = 0; i < filteredProxies.length; i += batchSize) {
+                const batch = filteredProxies.slice(i, i + batchSize);
+                await Promise.all(batch.map(async (proxy, idx) => {
+                    const globalIdx = i + idx;
+                    const statusData = await checkProxyStatus(proxy.ip, proxy.port);
+                    proxy.status = statusData.status;
+                    proxy.delay = statusData.delay;
+                    proxy.speed = statusData.speed;
+                    proxy.checkInfo = statusData;
+                    
+                    // Update tabel jika proxy ini masih di halaman yang sedang aktif
+                    updateProxyRowInTable(globalIdx, proxy);
+                }));
+            }
+        }
+        
+        function updateProxyRowInTable(proxyIndex, proxy) {
+            // Cek apakah proxy ini sedang ditampilkan di halaman saat ini
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            
+            if (proxyIndex >= start && proxyIndex < end) {
+                // Update row yang sesuai
+                const rowIndex = proxyIndex - start;
+                const tbody = document.getElementById('proxyTableBody');
+                const rows = tbody.getElementsByTagName('tr');
+                
+                if (rows[rowIndex]) {
+                    const statusCell = rows[rowIndex].querySelector('.status-cell');
+                    if (statusCell) {
+                        statusCell.innerHTML = getStatusHtml(proxy);
+                    }
+                }
             }
         }
 
         function generateVmess(proxy) {
-            const path = \`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`;
-            const vmessObj = {
-                v: "2",
-                ps: \`[VMess-TLS] \${proxy.country} - \${proxy.isp}\`,
-                add: host,
-                port: 443,
-                id: uuid,
-                aid: "0",
-                scy: "zero",
-                net: "ws",
-                type: "none",
-                host: host,
-                path: path,
-                tls: "tls",
-                sni: host
-            };
-            return 'vmess://' + btoa(JSON.stringify(vmessObj));
+            const path = OBFS_PATH + proxy.ip + "=" + proxy.port;
+            const vmessObj = { v: "2", ps: VMS_LBL + " " + proxy.country + " - " + proxy.isp, add: host, port: 443, id: uuid, aid: "0", scy: "zero", net: "ws", type: "none", host: host, path: path, tls: "tls", sni: host };
+            return VMS_PRE + btoa(JSON.stringify(vmessObj));
         }
 
         function generateVless(proxy) {
-            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
-            const ps = encodeURIComponent(\`[VLESS-TLS] \${proxy.country} - \${proxy.isp}\`);
-            return \`vless://\${uuid}@\${host}:443?encryption=none&security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+            const path = encodeURIComponent(OBFS_PATH + proxy.ip + "=" + proxy.port);
+            return VLS_PRE + uuid + "@" + host + ":443?encryption=none&security=tls&type=ws&host=" + host + "&path=" + path + "&sni=" + host + "#" + encodeURIComponent(VLS_LBL + " " + proxy.country);
         }
 
         function generateTrojan(proxy) {
-            const path = encodeURIComponent(\`/Free-VPN-CF-Geo-Project/\${proxy.ip}=\${proxy.port}\`);
-            const ps = encodeURIComponent(\`[Trojan-TLS] \${proxy.country} - \${proxy.isp}\`);
-            return \`trojan://\${uuid}@\${host}:443?security=tls&type=ws&host=\${host}&path=\${path}&sni=\${host}#\${ps}\`;
+            const path = encodeURIComponent(OBFS_PATH + proxy.ip + "=" + proxy.port);
+            return TRJ_PRE + uuid + "@" + host + ":443?security=tls&type=ws&host=" + host + "&path=" + path + "&sni=" + host + "#" + encodeURIComponent(TRJ_LBL + " " + proxy.country);
+        }
+
+        function generateShadowsocks(proxy) {
+            // Format sesuai contoh: ss://method:password@host:port?parameter#tag
+            const method = "none";
+            const password = uuid;
+            const encodedAuth = btoa(\`\${method}:\${password}\`);
+            const path = encodeURIComponent(OBFS_PATH + proxy.ip + "=" + proxy.port);
+            
+            // URL Shadowsocks dengan parameter yang sama seperti VMESS/VLESS/TROJAN
+            const ssUrl = \`ss://\${encodedAuth}@\${host}:443?path=\${path}&security=tls&host=\${host}&type=ws&sni=\${host}#\${encodeURIComponent(SS_LBL + " " + proxy.country)}\`;
+            
+            return ssUrl;
+        }
+
+        function toggleDropdown(id) {
+            document.querySelectorAll('.dropdown-menu').forEach(el => {
+                if(el.id !== 'drop-' + id) el.classList.remove('show');
+            });
+            document.getElementById('drop-' + id).classList.toggle('show');
+        }
+
+        window.onclick = function(event) {
+            if (!event.target.closest('.dropdown-container')) {
+                document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
+            }
         }
 
         function copyToClipboard(text, btn) {
             navigator.clipboard.writeText(text).then(() => {
-                const originalHtml = btn.innerHTML;
-                btn.innerHTML = '<i class="fas fa-check"></i>';
-                btn.classList.replace('bg-slate-700', 'bg-green-600');
-                setTimeout(() => {
-                    btn.innerHTML = originalHtml;
-                    btn.classList.replace('bg-green-600', 'bg-slate-700');
-                }, 1000);
+                const original = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+                setTimeout(() => { btn.innerHTML = original; }, 1500);
             });
+        }
+        
+        function getStatusHtml(proxy) {
+            if (!proxy.status) {
+                return \`
+                    <div class="status-badge status-checking">
+                        <i class="fas fa-spinner fa-pulse"></i>
+                        <span>Checking...</span>
+                    </div>
+                \`;
+            }
+            
+            const isActive = proxy.status === 'ACTIVE';
+            const tooltipText = \`Delay: \${proxy.delay} | Speed: \${proxy.speed}\`;
+            
+            if (isActive) {
+                return \`
+                    <div class="status-badge status-active tooltip" data-tooltip="\${tooltipText}">
+                        <i class="fas fa-check-circle animate-pulse text-green-500"></i>
+                        <span class="animate-pulse text-green-500 font-semibold">ACTIVE</span>
+                    </div>
+                \`;
+            } else if (proxy.status === 'ERROR') {
+                return \`
+                    <div class="status-badge status-inactive tooltip" data-tooltip="Connection failed">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <span>ERROR</span>
+                    </div>
+                \`;
+            } else {
+                return \`
+                    <div class="status-badge status-inactive">
+                        <i class="fas fa-times-circle"></i>
+                        <span>INACTIVE</span>
+                    </div>
+                \`;
+            }
         }
 
         function renderTable() {
             const start = (currentPage - 1) * itemsPerPage;
-            const end = start + itemsPerPage;
-            const pagedProxies = filteredProxies.slice(start, end);
-
+            const paged = filteredProxies.slice(start, start + itemsPerPage);
             const tbody = document.getElementById('proxyTableBody');
             tbody.innerHTML = '';
 
-            pagedProxies.forEach(proxy => {
-                const tr = document.createElement('tr');
-                tr.className = "border-b border-slate-800 hover:bg-slate-800/30 transition-colors";
-
+            paged.forEach((proxy, idx) => {
+                const id = start + idx;
                 const vmess = generateVmess(proxy);
                 const vless = generateVless(proxy);
                 const trojan = generateTrojan(proxy);
+                const shadowsocks = generateShadowsocks(proxy);
 
-                tr.innerHTML = \`
-                    <td class="py-4 px-4">
-                        <div class="flex items-center gap-3">
-                            <span class="text-2xl">\${getFlagEmoji(proxy.country)}</span>
-                            <span class="font-medium">\${proxy.country}</span>
-                        </div>
-                    </td>
-                    <td class="py-4 px-4 text-slate-300">\${proxy.isp}</td>
-                    <td class="py-4 px-4">
-                        <div class="flex justify-center gap-2">
-                            <button onclick="copyToClipboard('\${vmess}', this)" class="btn-copy bg-slate-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VMess">VMESS</button>
-                            <button onclick="copyToClipboard('\${vless}', this)" class="btn-copy bg-slate-700 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy VLess">VLESS</button>
-                            <button onclick="copyToClipboard('\${trojan}', this)" class="btn-copy bg-slate-700 hover:bg-purple-600 px-3 py-1.5 rounded-lg text-xs font-bold" title="Copy Trojan">TROJAN</button>
-                        </div>
-                    </td>
+                tbody.innerHTML += \`
+                    <tr class="border-b border-white/5 hover:bg-white/5 transition-all">
+                        <td class="py-4 px-4">
+                            <div class="flex items-center gap-3">
+                                <span class="text-2xl">\${getFlagEmoji(proxy.countryCode)}</span>
+                                <div>
+                                    <div class="font-bold text-sm md:text-base">\${proxy.country}</div>
+                                    <div class="text-[11px] text-slate-400 font-mono">\${proxy.ip}:\${proxy.port}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="py-4 px-4">
+                            <div class="text-sm">\${proxy.isp || '-'}</div>
+                        </td>
+                        <td class="py-4 px-4 text-center status-cell">
+                            \${getStatusHtml(proxy)}
+                        </td>
+                        <td class="py-4 px-4 text-right relative dropdown-container">
+                            <button onclick="toggleDropdown('\${id}')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-2">
+                                <i class="fas fa-cog"></i> Config <i class="fas fa-chevron-down text-[10px]"></i>
+                            </button>
+                            
+                            <div id="drop-\${id}" class="dropdown-menu">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button onclick="copyToClipboard('\${vless}', this)" class="bg-indigo-600 hover:bg-indigo-700 p-2 rounded-md text-[10px] font-bold text-white flex flex-col items-center gap-1">
+                                        <i class="fas fa-link"></i> VLESS
+                                    </button>
+                                    <button onclick="copyToClipboard('\${trojan}', this)" class="bg-purple-600 hover:bg-purple-700 p-2 rounded-md text-[10px] font-bold text-white flex flex-col items-center gap-1">
+                                        <i class="fas fa-shield-halved"></i> TROJAN
+                                    </button>
+                                    <button onclick="copyToClipboard('\${shadowsocks}', this)" class="bg-cyan-600 hover:bg-cyan-700 p-2 rounded-md text-[10px] font-bold text-white flex flex-col items-center gap-1">
+                                        <i class="fas fa-lock"></i> SS GatchaNG
+                                    </button>
+                                    <button onclick="copyToClipboard('\${vmess}', this)" class="bg-emerald-600 hover:bg-emerald-700 p-2 rounded-md text-[10px] font-bold text-white flex flex-col items-center gap-1">
+                                        <i class="fas fa-bolt"></i> VMESS
+                                    </button>
+                                </div>
+                            </div>
+                         </td>
+                     </tr>
                 \`;
-                tbody.appendChild(tr);
             });
-
             updatePagination();
         }
 
         function updatePagination() {
             const totalPages = Math.ceil(filteredProxies.length / itemsPerPage);
-            const info = document.getElementById('paginationInfo');
-            info.innerText = \`Showing \${Math.min(filteredProxies.length, (currentPage-1)*itemsPerPage + 1)} to \${Math.min(filteredProxies.length, currentPage*itemsPerPage)} of \${filteredProxies.length} proxies\`;
-
+            document.getElementById('paginationInfo').innerText = \`Page \${currentPage} of \${totalPages}\`;
             const controls = document.getElementById('paginationControls');
             controls.innerHTML = '';
-
-            if (totalPages <= 1) return;
-
-            const prevBtn = document.createElement('button');
-            prevBtn.className = \`px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition \${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}\`;
-            prevBtn.innerText = 'Prev';
-            prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderTable(); } };
-            controls.appendChild(prevBtn);
-
-            // Limited page numbers
-            let startPage = Math.max(1, currentPage - 1);
-            let endPage = Math.min(totalPages, startPage + 2);
-            if (endPage - startPage < 2) startPage = Math.max(1, endPage - 2);
-
-            for (let i = startPage; i <= endPage; i++) {
-                const pageBtn = document.createElement('button');
-                pageBtn.className = \`w-10 h-10 rounded-lg transition \${currentPage === i ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-400'}\`;
-                pageBtn.innerText = i;
-                pageBtn.onclick = () => { currentPage = i; renderTable(); };
-                controls.appendChild(pageBtn);
-            }
-
-            const nextBtn = document.createElement('button');
-            nextBtn.className = \`px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition \${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}\`;
-            nextBtn.innerText = 'Next';
-            nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; renderTable(); } };
-            controls.appendChild(nextBtn);
+            
+            const btnClass = "px-3 py-1 rounded-lg bg-white/5 border border-white/10 text-xs hover:bg-white/10 disabled:opacity-30";
+            
+            const prev = document.createElement('button');
+            prev.className = btnClass;
+            prev.innerHTML = '<i class="fas fa-chevron-left"></i> Prev';
+            prev.disabled = currentPage === 1;
+            prev.onclick = () => { currentPage--; renderTable(); };
+            
+            const next = document.createElement('button');
+            next.className = btnClass;
+            next.innerHTML = 'Next <i class="fas fa-chevron-right"></i>';
+            next.disabled = currentPage === totalPages;
+            next.onclick = () => { currentPage++; renderTable(); };
+            
+            controls.append(prev, next);
         }
 
         function getFlagEmoji(countryCode) {
             if (!countryCode || countryCode.length !== 2) return '🌐';
-            const codePoints = countryCode
-                .toUpperCase()
-                .split('')
-                .map(char => 127397 + char.charCodeAt());
+            const codePoints = countryCode.toUpperCase().split('').map(char => 127397 + char.charCodeAt());
             return String.fromCodePoint(...codePoints);
         }
 
         document.getElementById('searchInput').oninput = (e) => {
             const query = e.target.value.toLowerCase();
-            filteredProxies = allProxies.filter(p =>
-                p.country.toLowerCase().includes(query) ||
-                p.isp.toLowerCase().includes(query)
-            );
+            filteredProxies = allProxies.filter(p => p.country.toLowerCase().includes(query) || p.isp.toLowerCase().includes(query));
             currentPage = 1;
             renderTable();
         };
@@ -621,7 +930,7 @@ async function isVMess(buffer) {
         const auth_id = buffer.subarray(0, 16);
         const len_encrypted = buffer.subarray(16, 34);
         const nonce = buffer.subarray(34, 42);
-        const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
+        const key = md5(uuidBytes, str2arr(atob('YzQ4NjE5ZmUtOGYwMi00OWUwLWI5ZTktZWRmNzYzZTE3ZTIx')));
         const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
         const header_length_nonce = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV, auth_id, nonce]).subarray(0, 12);
         const decryptedLen = await aesGcmDecrypt(header_length_key, header_length_nonce, len_encrypted, auth_id);
@@ -646,7 +955,7 @@ async function parseP4Header(buffer) {
     const nonce = remaining.subarray(0, 8);
     remaining = remaining.subarray(8);
 
-    const key = md5(uuidBytes, str2arr("c48619fe-8f02-49e0-b9e9-edf763e17e21"));
+    const key = md5(uuidBytes, str2arr(atob('YzQ4NjE5ZmUtOGYwMi00OWUwLWI5ZTktZWRmNzYzZTE3ZTIx')));
     const mainKey = key;
 
     const header_length_key = kdf(key, [KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY, auth_id, nonce]).subarray(0, 16);
