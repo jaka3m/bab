@@ -62,14 +62,28 @@ class CfClient {
   }
 
   async getWorkerScript(accountId, workerName) {
-    const url = `${CF_BASE_URL}/accounts/${accountId}/workers/services/${workerName}/content`;
+    // Attempt to get script from production environment content endpoint
+    const url = `${CF_BASE_URL}/accounts/${accountId}/workers/services/${workerName}/environments/production/content`;
     const response = await fetch(url, {
       headers: {
         "X-Auth-Email": this.email,
         "X-Auth-Key": this.apiKey
       }
     });
-    if (!response.ok) throw new Error(`Failed to fetch worker script: ${response.status}`);
+
+    if (!response.ok) {
+      // Fallback to general service content if production environment fetch fails
+      const fallbackUrl = `${CF_BASE_URL}/accounts/${accountId}/workers/services/${workerName}/content`;
+      const fallbackResponse = await fetch(fallbackUrl, {
+        headers: {
+          "X-Auth-Email": this.email,
+          "X-Auth-Key": this.apiKey
+        }
+      });
+      if (!fallbackResponse.ok) throw new Error(`Failed to fetch worker script: ${fallbackResponse.status}`);
+      return fallbackResponse.text();
+    }
+
     return response.text();
   }
 
@@ -945,7 +959,7 @@ const HTML_CONTENT = `
         <div class="form-group">
           <label class="form-label">Full Domain to Register:</label>
           <input type="text" class="form-input" id="fullSubdomain" placeholder="contoh: api.example.com atau *.example.com">
-          <small style="color: #ccc;">Masukkan lengkap domain yang ingin didaftarkan. Untuk wildcard gunakan format: *.example.com</small>
+          <small style="color: #ccc;" id="domainHelpText">Masukkan lengkap domain yang ingin didaftarkan. Untuk wildcard gunakan format: *.example.com</small>
         </div>
 
         <!-- Auto-detected info -->
@@ -1465,11 +1479,23 @@ const HTML_CONTENT = `
     async function registerWildcard() {
       const accountIndex = document.getElementById('wildcardAccountSelect').value;
       const workerName = document.getElementById('wildcardWorkerSelect').value;
-      const fullSubdomain = document.getElementById('fullSubdomain').value;
+      let fullSubdomain = document.getElementById('fullSubdomain').value.trim();
 
       if (!accountIndex || !workerName || !fullSubdomain) {
         showNotification('Please select account, worker, and enter domain', 'error');
         return;
+      }
+
+      // Auto-append root domain if not already present
+      if (currentWildcardConfig && currentWildcardConfig.rootDomain) {
+        const root = currentWildcardConfig.rootDomain;
+        if (!fullSubdomain.endsWith(root)) {
+          if (fullSubdomain.endsWith('.')) {
+            fullSubdomain += root;
+          } else {
+            fullSubdomain += '.' + root;
+          }
+        }
       }
 
       const user = users[accountIndex];
@@ -1479,7 +1505,7 @@ const HTML_CONTENT = `
         return;
       }
 
-      showNotification('Registering domain...');
+      showNotification('Registering domain: ' + fullSubdomain + '...');
 
       try {
         const response = await fetch('/api/registerWildcard', {
@@ -1594,6 +1620,10 @@ const HTML_CONTENT = `
         document.getElementById('detectedServiceName').textContent = currentWildcardConfig.serviceName || '-';
         document.getElementById('detectedRootDomain').textContent = currentWildcardConfig.rootDomain || '-';
         document.getElementById('autoDetectedInfo').style.display = 'block';
+
+        if (currentWildcardConfig.rootDomain) {
+          document.getElementById('domainHelpText').innerHTML = 'Masukkan subdomain. Domain <strong>.' + currentWildcardConfig.rootDomain + '</strong> akan ditambahkan otomatis.';
+        }
       }
     }
 
