@@ -1,2834 +1,2199 @@
-const CF_BASE_URL = "https://api.cloudflare.com/client/v4";
-const DEFAULT_SCRIPT_URL = "https://r2.lifetime69.workers.dev/raw/ffdr6xgncp7mkfcd6mj";
-const PROXY_LIST_URL = "https://r2.lifetime69.workers.dev/raw/bj3yy7362a9mkfcjltj";
-
-// ==================== UTILITY FUNCTIONS ====================
-
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-function sanitizeWorkerName(name) {
-  if (!name) return `worker-${Date.now().toString(36)}`;
-  return name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
-}
-
-// ==================== CLOUDFLARE API CLIENT ====================
-
-class CfClient {
-  constructor(email, apiKey) {
-    this.email = email;
-    this.apiKey = apiKey;
-  }
-
-  async _fetch(path, options = {}) {
-    const url = `${CF_BASE_URL}${path}`;
-    const headers = {
-      "X-Auth-Email": this.email,
-      "X-Auth-Key": this.apiKey,
-      "Content-Type": options.contentType || "application/json",
-      "User-Agent": "Cloudflare-Worker-Manager/1.0"
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-Auth-Email, X-Auth-Key",
+      "Access-Control-Max-Age": "86400",
     };
 
-    if (options.contentType === null) delete headers["Content-Type"];
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
-    const response = await fetch(url, {
-      method: options.method || 'GET',
-      headers: headers,
-      body: options.body
-    });
-
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.errors?.[0]?.message || `CF API Error: ${response.status}`);
-    }
-    return data;
-  }
-
-  async getUserInfo() {
-    return this._fetch("/user");
-  }
-
-  async getAccounts() {
-    return this._fetch("/accounts");
-  }
-
-  async listWorkers(accountId) {
-    return this._fetch(`/accounts/${accountId}/workers/services`);
-  }
-
-  async getWorkerScript(accountId, workerName) {
-    // Attempt to get script from production environment content endpoint
-    const url = `${CF_BASE_URL}/accounts/${accountId}/workers/services/${workerName}/environments/production/content`;
-    const response = await fetch(url, {
-      headers: {
-        "X-Auth-Email": this.email,
-        "X-Auth-Key": this.apiKey
-      }
-    });
-
-    if (!response.ok) {
-      // Fallback to general service content if production environment fetch fails
-      const fallbackUrl = `${CF_BASE_URL}/accounts/${accountId}/workers/services/${workerName}/content`;
-      const fallbackResponse = await fetch(fallbackUrl, {
-        headers: {
-          "X-Auth-Email": this.email,
-          "X-Auth-Key": this.apiKey
-        }
-      });
-      if (!fallbackResponse.ok) throw new Error(`Failed to fetch worker script: ${fallbackResponse.status}`);
-      return fallbackResponse.text();
-    }
-
-    return response.text();
-  }
-
-  async updateWorker(accountId, workerName, scriptContent) {
-    const boundary = `----WebKitFormBoundary${Date.now().toString(16)}`;
-    const metadata = {
-      main_module: "worker.js",
-      compatibility_date: "2024-12-03",
-      compatibility_flags: ["nodejs_compat"]
-    };
-
-    const body = [
-      `--${boundary}`,
-      'Content-Disposition: form-data; name="worker.js"; filename="worker.js"',
-      'Content-Type: application/javascript+module',
-      '',
-      scriptContent,
-      `--${boundary}`,
-      'Content-Disposition: form-data; name="metadata"',
-      'Content-Type: application/json',
-      '',
-      JSON.stringify(metadata),
-      `--${boundary}--`,
-      ''
-    ].join('\r\n');
-
-    return this._fetch(`/accounts/${accountId}/workers/services/${workerName}/environments/production`, {
-      method: 'PUT',
-      contentType: `multipart/form-data; boundary=${boundary}`,
-      body: body
-    });
-  }
-
-  async getOrCreateSubdomain(accountId) {
-    try {
-      const data = await this._fetch(`/accounts/${accountId}/workers/subdomain`);
-      return data.result.subdomain;
-    } catch (error) {
-      const subdomainName = this.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+    // ENDPOINT IMPORT DARI URL (tidak perlu auth)
+    if (url.pathname === '/api/import' && request.method === 'POST') {
       try {
-        const response = await this._fetch(`/accounts/${accountId}/workers/subdomain`, {
-          method: 'PUT',
-          body: JSON.stringify({ subdomain: subdomainName })
+        const { importUrl } = await request.json();
+        if (!importUrl) {
+          return new Response(JSON.stringify({ success: false, error: "URL diperlukan" }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+        
+        console.log("Importing from:", importUrl);
+        const res = await fetch(importUrl);
+        
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: Gagal mengambil file dari ${importUrl}`);
+        }
+        
+        const code = await res.text();
+        return new Response(JSON.stringify({ success: true, code }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
-        return response.result.subdomain;
       } catch (e) {
-        throw new Error("Failed to get or create worker subdomain: " + e.message);
+        console.error("Import error:", e);
+        return new Response(JSON.stringify({ success: false, error: e.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
     }
-  }
 
-  async createWorker(accountId, workerName, scriptContent) {
-    // 1. Upload script
-    await this.updateWorker(accountId, workerName, scriptContent);
+    // API Logic (perlu auth)
+    if (url.pathname.startsWith('/api/')) {
+      try {
+        const authEmail = request.headers.get("X-Auth-Email");
+        const authKey = request.headers.get("X-Auth-Key");
 
-    // 2. Enable subdomain
-    try {
-      await this._fetch(`/accounts/${accountId}/workers/services/${workerName}/environments/production/subdomain`, {
-        method: 'POST',
-        body: JSON.stringify({ enabled: true })
-      });
-    } catch (e) {
-      console.error("Subdomain activation failed:", e);
-    }
+        if (!authEmail || !authKey) throw new Error("Email atau API Key tidak ditemukan di header.");
 
-    // 3. Get subdomain info
-    const subdomain = await this.getOrCreateSubdomain(accountId);
-    return { workerName, subdomain };
-  }
+        const commonHeaders = {
+          "X-Auth-Email": authEmail,
+          "X-Auth-Key": authKey,
+          "Content-Type": "application/json"
+        };
 
-  async deleteWorker(accountId, workerName) {
-    return this._fetch(`/accounts/${accountId}/workers/services/${workerName}`, {
-      method: 'DELETE'
-    });
-  }
+        const getAccountId = async () => {
+          const res = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: commonHeaders });
+          const data = await res.json();
+          if (!data.success) throw new Error("Gagal login API Cloudflare. Cek Email/Key.");
+          return data.result[0].id;
+        };
 
-  async listZones(name = "") {
-    let path = "/zones?status=active&per_page=50";
-    if (name) path += `&name=${name}`;
-    return this._fetch(path);
-  }
+        // Cache untuk subdomain account
+        let cachedSubdomain = null;
+        let cachedAccountId = null;
 
-  async registerCustomDomain(accountId, workerName, hostname, zoneId) {
-    return this._fetch(`/accounts/${accountId}/workers/domains`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        environment: "production",
-        hostname: hostname,
-        service: workerName,
-        zone_id: zoneId
-      })
-    });
-  }
-
-  async listCustomDomains(accountId, serviceName) {
-    return this._fetch(`/accounts/${accountId}/workers/domains?service=${serviceName}`);
-  }
-}
-
-// ==================== HANDLERS ====================
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-
-async function handleApiRequest(request) {
-  const url = new URL(request.url);
-  const path = url.pathname;
-
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  try {
-    if (path === '/api/generateProxyIP') {
-      const response = await fetch(PROXY_LIST_URL);
-      const text = await response.text();
-      const lines = text.split('\n').filter(line => line.trim() !== '');
-      const randomLine = lines[Math.floor(Math.random() * lines.length)];
-      const proxyIP = randomLine.split(',')[0];
-      return new Response(JSON.stringify({ success: true, proxyIP }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (request.method !== 'POST') {
-      return new Response(JSON.stringify({ success: false, message: "Method not allowed" }), { status: 405, headers: corsHeaders });
-    }
-
-    const body = await request.json();
-    const { email, globalAPIKey, accountId } = body;
-    const client = new CfClient(email, globalAPIKey);
-
-    switch (path) {
-      case '/api/userInfo':
-        return new Response(JSON.stringify(await client.getUserInfo()), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/accounts':
-        return new Response(JSON.stringify(await client.getAccounts()), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/listWorkers':
-        return new Response(JSON.stringify(await client.listWorkers(accountId)), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/getWorkerScript':
-        const script = await client.getWorkerScript(accountId, body.workerName);
-        return new Response(JSON.stringify({ success: true, scriptContent: script }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/updateWorker':
-        await client.updateWorker(accountId, body.workerName, body.scriptContent);
-        return new Response(JSON.stringify({ success: true, message: "Worker updated" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/deleteWorker':
-        await client.deleteWorker(accountId, body.workerName);
-        return new Response(JSON.stringify({ success: true, message: "Worker deleted" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-      case '/api/bulkDeleteWorkers': {
-        const delResults = await Promise.allSettled(body.workerNames.map(name => client.deleteWorker(accountId, name)));
-        return new Response(JSON.stringify({ success: true, results: delResults }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-
-      case '/api/createWorker': {
-        const { workerName, workerScriptUrl, template } = body;
-        const targetUrl = workerScriptUrl || DEFAULT_SCRIPT_URL;
-        const res = await fetch(targetUrl);
-        let script = await res.text();
-        const uuid = generateUUID();
-        script = script.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, uuid);
-
-        let proxyIP = "";
-        if (template === 'nautica' || template === 'nautica-mod') {
-          const pRes = await fetch(PROXY_LIST_URL);
-          const pText = await pRes.text();
-          const pLines = pText.split('\n').filter(l => l.trim() !== '');
-          proxyIP = pLines[Math.floor(Math.random() * pLines.length)].split(',')[0];
-        }
-
-        const result = await client.createWorker(accountId, sanitizeWorkerName(workerName), script);
-        const host = `${result.workerName}.${result.subdomain}.workers.dev`;
-        const pathSuffix = "%2FALL1";
-
-        return new Response(JSON.stringify({
-          success: true,
-          message: "Worker created",
-          url: `https://${host}`,
-          proxyIP,
-          vless: `vless://${uuid}@suporte.garena.com:443?encryption=none&security=tls&sni=${host}&fp=randomized&type=ws&host=${host}&path=${pathSuffix}#${result.workerName}`,
-          trojan: `trojan://${uuid}@suporte.garena.com:443?sni=${host}&type=ws&host=${host}&path=${pathSuffix}#${result.workerName}`
-        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-
-      case '/api/bulkCreateWorkers': {
-        const { accounts, workerName, workerScriptUrl, template } = body;
-        const targetUrl = workerScriptUrl || DEFAULT_SCRIPT_URL;
-        const sRes = await fetch(targetUrl);
-        const baseScript = await sRes.text();
-
-        const results = await Promise.all(accounts.map(async (acc) => {
-          try {
-            const accClient = new CfClient(acc.email, acc.apiKey);
-            const uuid = generateUUID();
-            let script = baseScript.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, uuid);
-
-            let proxyIP = "";
-            if (template === 'nautica' || template === 'nautica-mod') {
-              const pRes = await fetch(PROXY_LIST_URL);
-              const pText = await pRes.text();
-              const pLines = pText.split('\n').filter(l => l.trim() !== '');
-              proxyIP = pLines[Math.floor(Math.random() * pLines.length)].split(',')[0];
-            }
-
-            await accClient.createWorker(acc.accountId, sanitizeWorkerName(workerName), script);
-            return { email: acc.email, success: true, proxyIP };
-          } catch (e) {
-            return { email: acc.email, success: false, message: e.message };
+        // Helper function untuk mendapatkan subdomain account
+        const getAccountSubdomain = async (accountId) => {
+          if (cachedSubdomain && cachedAccountId === accountId) {
+            return cachedSubdomain;
           }
-        }));
+          
+          try {
+            const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
+              headers: commonHeaders
+            });
+            const data = await res.json();
+            
+            if (data.success && data.result && data.result.subdomain) {
+              cachedSubdomain = data.result.subdomain;
+              cachedAccountId = accountId;
+              return cachedSubdomain;
+            }
+          } catch(e) {
+            console.log("Gagal mengambil subdomain:", e);
+          }
+          
+          const emailPrefix = authEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+          cachedSubdomain = emailPrefix;
+          cachedAccountId = accountId;
+          return cachedSubdomain;
+        };
 
-        return new Response(JSON.stringify({ success: true, results }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
+        // Helper function untuk mendapatkan worker URL yang benar
+        const getWorkerUrl = async (accountId, workerName) => {
+          const subdomain = await getAccountSubdomain(accountId);
+          return `https://${workerName}.${subdomain}.workers.dev`;
+        };
 
-      case '/api/autoDiscoverConfig': {
-        const { targetDomain } = body;
-        const domainParts = targetDomain.split('.').filter(p => p !== '*');
-        const rootDomain = domainParts.slice(-2).join('.');
-
-        const zones = await client.listZones(rootDomain);
-        if (zones.result && zones.result.length > 0) {
-          return new Response(JSON.stringify({
-            success: true,
-            accountId: zones.result[0].account.id,
-            zone: zones.result[0]
-          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        } else {
-          return new Response(JSON.stringify({ success: false, message: "Zone not found for domain" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        // List Workers with URLs
+        if (url.pathname === '/api/list') {
+          const accountId = await getAccountId();
+          const subdomain = await getAccountSubdomain(accountId);
+          
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts`, { headers: commonHeaders });
+          const data = await res.json();
+          
+          if (data.success && data.result) {
+            for (const worker of data.result) {
+              worker.url = `https://${worker.id}.${subdomain}.workers.dev`;
+              worker.subdomain = subdomain;
+            }
+          }
+          
+          return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
         }
-      }
 
-      case '/api/registerWildcard': {
-        const { subdomain, zoneId, serviceName } = body;
-        await client.registerCustomDomain(accountId, serviceName, subdomain, zoneId);
-        return new Response(JSON.stringify({ success: true, message: `Domain ${subdomain} registered to ${serviceName}` }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
+        // Get Script Code with URL
+        if (url.pathname === '/api/get') {
+          const workerName = url.searchParams.get("name");
+          const accountId = await getAccountId();
+          
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}`, { 
+            headers: commonHeaders 
+          });
+          
+          let scriptContent = await res.text();
+          
+          scriptContent = scriptContent.replace(/^--[a-f0-9]+(\r?\n)Content-Disposition: form-data; name="[^"]+"(\r?\n\r?\n)?/gm, '');
+          scriptContent = scriptContent.replace(/--[a-f0-9]+--(\r?\n)?$/g, '');
+          scriptContent = scriptContent.replace(/--[a-f0-9]+(\r?\n)Content-Disposition: form-data; name="[^"]+"(\r?\n\r?\n)?/g, '');
+          scriptContent = scriptContent.trim();
+          
+          const workerUrl = await getWorkerUrl(accountId, workerName);
+          
+          return new Response(JSON.stringify({ success: true, code: scriptContent, url: workerUrl }), { 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          });
+        }
 
-      case '/api/listWildcard': {
-        const data = await client.listCustomDomains(accountId, body.serviceName);
-        const domains = data.result.map(d => d.hostname);
-        return new Response(JSON.stringify({ success: true, domains }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
+        // Get Custom Domains
+        if (url.pathname === '/api/get-custom-domains') {
+          const workerName = url.searchParams.get("name");
+          const accountId = await getAccountId();
+          
+          try {
+            const domainsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
+              headers: commonHeaders
+            });
+            const domainsData = await domainsRes.json();
+            
+            const workerDomains = domainsData.success && domainsData.result ? 
+              domainsData.result.filter(d => d.service === workerName) : [];
+            
+            const zonesRes = await fetch(`https://api.cloudflare.com/client/v4/zones`, {
+              headers: commonHeaders
+            });
+            const zonesData = await zonesRes.json();
+            
+            const zones = zonesData.success && zonesData.result ? 
+              zonesData.result.map(z => ({ zone_id: z.id, zone_name: z.name })) : [];
+            
+            const workerUrl = await getWorkerUrl(accountId, workerName);
+            
+            return new Response(JSON.stringify({ 
+              success: true, 
+              subdomain: workerUrl,
+              customDomains: workerDomains,
+              zones: zones
+            }), { 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          } catch(e) {
+            return new Response(JSON.stringify({ success: false, error: e.message }), {
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
+        }
 
-      default:
-        return new Response(JSON.stringify({ success: false, message: "Not found" }), { status: 404, headers: corsHeaders });
+        // Attach Custom Domain (single)
+        if (url.pathname === '/api/attach-domain') {
+          const { workerName, domain, zoneId } = await request.json();
+          const accountId = await getAccountId();
+          
+          try {
+            const attachRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
+              method: "PUT",
+              headers: commonHeaders,
+              body: JSON.stringify({
+                environment: "production",
+                hostname: domain,
+                service: workerName,
+                zone_id: zoneId
+              })
+            });
+            
+            const attachData = await attachRes.json();
+            
+            return new Response(JSON.stringify({ 
+              success: attachData.success,
+              message: attachData.success ? `Domain ${domain} berhasil diattach ke ${workerName}` : attachData.errors?.[0]?.message,
+              domainId: attachData.success && attachData.result ? attachData.result.id : null
+            }), { 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          } catch(e) {
+            return new Response(JSON.stringify({ success: false, error: e.message }), {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
+        }
+
+        // Attach Multiple Custom Domains
+        if (url.pathname === '/api/attach-multiple-domains') {
+          const { workerName, domains, zoneId } = await request.json();
+          const accountId = await getAccountId();
+          const results = [];
+          
+          for (const domain of domains) {
+            try {
+              const attachRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
+                method: "PUT",
+                headers: commonHeaders,
+                body: JSON.stringify({
+                  environment: "production",
+                  hostname: domain,
+                  service: workerName,
+                  zone_id: zoneId
+                })
+              });
+              
+              const attachData = await attachRes.json();
+              results.push({
+                domain: domain,
+                success: attachData.success,
+                message: attachData.success ? `Berhasil` : (attachData.errors?.[0]?.message || "Gagal")
+              });
+            } catch(e) {
+              results.push({
+                domain: domain,
+                success: false,
+                message: e.message
+              });
+            }
+          }
+          
+          return new Response(JSON.stringify({ 
+            success: true,
+            results: results,
+            total: results.length,
+            successCount: results.filter(r => r.success).length,
+            failedCount: results.filter(r => !r.success).length
+          }), { 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          });
+        }
+
+        // Delete Custom Domain
+        if (url.pathname === '/api/delete-domain') {
+          const { domainId } = await request.json();
+          const accountId = await getAccountId();
+          
+          try {
+            const deleteRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains/${domainId}`, {
+              method: "DELETE",
+              headers: commonHeaders
+            });
+            
+            let deleteData = { success: true };
+            const text = await deleteRes.text();
+            if (text && text.trim()) {
+              try {
+                deleteData = JSON.parse(text);
+              } catch(e) {
+                deleteData = { success: deleteRes.ok };
+              }
+            } else {
+              deleteData = { success: deleteRes.ok };
+            }
+            
+            return new Response(JSON.stringify({ 
+              success: deleteData.success === true || deleteRes.ok,
+              message: deleteData.success || deleteRes.ok ? "Domain berhasil dihapus" : (deleteData.errors?.[0]?.message || "Gagal menghapus domain")
+            }), { 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          } catch(e) {
+            return new Response(JSON.stringify({ 
+              success: true,
+              message: "Domain berhasil dihapus"
+            }), { 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          }
+        }
+
+        // Delete Worker (single)
+        if (url.pathname === '/api/delete' && request.method === 'DELETE') {
+          const { name } = await request.json();
+          if (!name) throw new Error("Nama worker diperlukan");
+          
+          const accountId = await getAccountId();
+          
+          try {
+            const domainsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
+              headers: commonHeaders
+            });
+            const domainsData = await domainsRes.json();
+            
+            if (domainsData.success && domainsData.result) {
+              const workerDomains = domainsData.result.filter(d => d.service === name);
+              for (const domain of workerDomains) {
+                await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains/${domain.id}`, {
+                  method: "DELETE",
+                  headers: commonHeaders
+                });
+              }
+            }
+          } catch(e) {
+            console.log("Gagal hapus domains:", e);
+          }
+          
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
+            method: "DELETE",
+            headers: { "X-Auth-Email": authEmail, "X-Auth-Key": authKey },
+          });
+          
+          let data = { success: true };
+          const text = await res.text();
+          if (text && text.trim()) {
+            try {
+              data = JSON.parse(text);
+            } catch(e) {
+              data = { success: res.ok };
+            }
+          } else {
+            data = { success: res.ok };
+          }
+          
+          return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+
+        // Delete Multiple Workers (Bulk)
+        if (url.pathname === '/api/delete-bulk' && request.method === 'POST') {
+          const { names } = await request.json();
+          if (!names || !names.length) throw new Error("Daftar worker diperlukan");
+          
+          const accountId = await getAccountId();
+          const results = [];
+          
+          for (const name of names) {
+            try {
+              try {
+                const domainsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
+                  headers: commonHeaders
+                });
+                const domainsData = await domainsRes.json();
+                
+                if (domainsData.success && domainsData.result) {
+                  const workerDomains = domainsData.result.filter(d => d.service === name);
+                  for (const domain of workerDomains) {
+                    await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains/${domain.id}`, {
+                      method: "DELETE",
+                      headers: commonHeaders
+                    });
+                  }
+                }
+              } catch(e) {
+                console.log(`Gagal hapus domains untuk ${name}:`, e);
+              }
+              
+              const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
+                method: "DELETE",
+                headers: { "X-Auth-Email": authEmail, "X-Auth-Key": authKey },
+              });
+              
+              results.push({
+                name: name,
+                success: res.ok,
+                message: res.ok ? "Berhasil dihapus" : "Gagal dihapus"
+              });
+            } catch(e) {
+              results.push({
+                name: name,
+                success: false,
+                message: e.message
+              });
+            }
+          }
+          
+          return new Response(JSON.stringify({ 
+            success: true,
+            results: results,
+            total: results.length,
+            successCount: results.filter(r => r.success).length,
+            failedCount: results.filter(r => !r.success).length
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+
+        // Deploy/Update Script
+        if (url.pathname === '/api/update') {
+          const { name, code } = await request.json();
+          const accountId = await getAccountId();
+
+          const formData = new FormData();
+          formData.append("metadata", JSON.stringify({ main_module: "worker.js", compatibility_date: "2024-01-01" }));
+          formData.append("worker.js", new Blob([code], { type: "application/javascript+module" }));
+
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
+            method: "PUT",
+            headers: { "X-Auth-Email": authEmail, "X-Auth-Key": authKey },
+            body: formData
+          });
+          const data = await res.json();
+          
+          let subdomainUrl = null;
+          if (data.success) {
+            try {
+              const subRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}/subdomain`, {
+                method: "POST",
+                headers: { "X-Auth-Email": authEmail, "X-Auth-Key": authKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: true }),
+              });
+              const subData = await subRes.json();
+              if (subData.success) {
+                const accountSubdomain = await getAccountSubdomain(accountId);
+                subdomainUrl = `https://${name}.${accountSubdomain}.workers.dev`;
+              }
+            } catch(e) {
+              console.log("Subdomain activation failed:", e);
+            }
+          }
+          
+          return new Response(JSON.stringify({ ...data, subdomain: subdomainUrl }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+
+      } catch (e) {
+        return new Response(JSON.stringify({ success: false, errors: [{ message: e.message }] }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
     }
-  } catch (error) {
-    return new Response(JSON.stringify({ success: false, message: error.message }), { status: 500, headers: corsHeaders });
-  }
-}
 
-const HTML_CONTENT = `
+    // Serve HTML with Enhanced UI
+    const html = `
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cloudflare Worker Manager</title>
+  <title>✨ Cloudflare Worker Manager Pro ✨</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; background: #1a1a1a; color: white; padding: 20px; }
-    .container { max-width: 1400px; margin: 0 auto; }
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; flex-wrap: wrap; }
-    .logo { font-size: 24px; font-weight: bold; }
-    .card { background: #2d2d2d; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
-    .btn { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin: 5px; }
-    .btn:hover { background: #0056b3; }
-    .btn-danger { background: #dc3545; }
-    .btn-danger:hover { background: #c82333; }
-    .btn-success { background: #28a745; }
-    .btn-success:hover { background: #218838; }
-    .btn-warning { background: #ffc107; color: black; }
-    .btn-warning:hover { background: #e0a800; }
-    .btn-info { background: #17a2b8; }
-    .btn-info:hover { background: #138496; }
-    .form-group { margin-bottom: 15px; }
-    .form-label { display: block; margin-bottom: 5px; }
-    .form-input { width: 100%; padding: 8px; border: 1px solid #444; border-radius: 5px; background: #1a1a1a; color: white; }
-    .form-textarea { min-height: 300px; font-family: monospace; font-size: 12px; }
-    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 1000; }
-    .modal-content { background: #2d2d2d; padding: 20px; border-radius: 10px; width: 90%; max-width: 800px; max-height: 90vh; overflow-y: auto; }
-    .modal-large { max-width: 95%; }
-    .worker-item { background: #3d3d3d; padding: 15px; margin: 10px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-    .worker-item.selected { background: #4a4a4a; border: 1px solid #007bff; }
-    .worker-checkbox { margin-right: 10px; }
-    .notification { position: fixed; top: 20px; right: 20px; background: #28a745; color: white; padding: 15px; border-radius: 5px; display: none; z-index: 1001; }
-    .notification.error { background: #dc3545; }
-    .notification.warning { background: #ffc107; color: black; }
-    .accounts-panel { background: #3d3d3d; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-    .account-badge { display: inline-block; background: #007bff; color: white; padding: 5px 10px; border-radius: 15px; margin: 5px; font-size: 12px; }
-    .account-badge.active { background: #28a745; }
-    .account-badge .remove { margin-left: 5px; cursor: pointer; }
-    .bulk-actions { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; padding: 15px; border-radius: 10px; display: none; z-index: 999; }
-    .bulk-actions.active { display: block; }
-    .search-filter { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
-    .search-filter input, .search-filter select { flex: 1; min-width: 200px; }
-    .auto-refresh { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
-    .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0; }
-    .analytics-card { background: #3d3d3d; padding: 15px; border-radius: 8px; text-align: center; }
-    .analytics-value { font-size: 24px; font-weight: bold; margin: 10px 0; }
-    .analytics-label { font-size: 12px; opacity: 0.8; }
-
-    /* Worker Actions dengan Dropdown */
-    .worker-actions {
-      display: flex;
-      gap: 5px;
+    :root {
+      --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --glass-bg: rgba(255, 255, 255, 0.08);
+      --glass-border: rgba(255, 255, 255, 0.15);
+      --neon-glow: 0 0 10px rgba(102, 126, 234, 0.5);
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      background-attachment: fixed;
+      font-family: 'Poppins', 'Segoe UI', sans-serif;
+      min-height: 100vh;
       position: relative;
     }
-
-    .actions-dropdown {
-      position: relative;
-      display: inline-block;
-    }
-
-    .dropdown-content {
-      display: none;
-      position: absolute;
-      right: 0;
-      background: #2d2d2d;
-      min-width: 160px;
-      box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-      z-index: 100;
-      border-radius: 5px;
-      overflow: hidden;
-      border: 1px solid #444;
-    }
-
-    .dropdown-content a {
-      color: white;
-      padding: 12px 16px;
-      text-decoration: none;
-      display: block;
-      cursor: pointer;
-      border-bottom: 1px solid #444;
-    }
-
-    .dropdown-content a:hover {
-      background: #3d3d3d;
-    }
-
-    .dropdown-content a.delete-action {
-      color: #ff6b6b;
-    }
-
-    .dropdown-content a.delete-action:hover {
-      background: #5a2a2a;
-    }
-
-    .actions-dropdown:hover .dropdown-content {
-      display: block;
-    }
-
-    /* Perbaikan tampilan text agar tidak keluar */
-    .worker-name {
-      font-weight: bold;
-      word-break: break-word;
-    }
-
-    .account-email {
-      font-size: 12px;
-      color: #ccc;
-      word-break: break-word;
-    }
-
-    .worker-info {
-      flex: 1;
-      min-width: 0;
-      margin-right: 15px;
-    }
-
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
-    .stat-item { text-align: center; padding: 10px; background: #3d3d3d; border-radius: 5px; }
-    .user-info-item { display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid #444; }
-    .user-info-label { font-weight: bold; }
-    .user-info-value { color: #ccc; word-break: break-word; }
-    .api-key-masked { font-family: monospace; background: #1a1a1a; padding: 5px 10px; border-radius: 3px; border: 1px solid #444; }
-    .copy-btn { background: #6c757d; padding: 2px 8px; font-size: 12px; margin-left: 5px; }
-    .copy-btn:hover { background: #545b62; }
-
-    /* Accounts dropdown */
-    .accounts-dropdown {
-      position: relative;
-      display: inline-block;
-    }
-
-    .accounts-dropdown-content {
-      display: none;
-      position: absolute;
-      background: #2d2d2d;
-      min-width: 250px;
-      box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-      z-index: 100;
-      border-radius: 5px;
-      overflow: hidden;
-      border: 1px solid #444;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-
-    .accounts-dropdown-content .account-item {
-      padding: 10px 15px;
-      border-bottom: 1px solid #444;
-      cursor: pointer;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .accounts-dropdown-content .account-item:hover {
-      background: #3d3d3d;
-    }
-
-    .accounts-dropdown-content .account-item.active {
-      background: #007bff;
-    }
-
-    .accounts-dropdown:hover .accounts-dropdown-content {
-      display: block;
-    }
-
-    .current-account {
-      background: #28a745;
-      color: white;
-      padding: 8px 15px;
-      border-radius: 20px;
-      font-size: 14px;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-    }
-
-    .loading {
-      opacity: 0.6;
-      pointer-events: none;
-    }
-
-    /* Config Display Styles */
-    .config-display {
-      background: #1a1a1a;
-      padding: 10px;
-      border-radius: 5px;
-      margin: 10px 0;
-      border: 1px solid #444;
-      font-family: monospace;
-      font-size: 12px;
-      word-break: break-all;
-    }
-
-    .config-type {
-      font-weight: bold;
-      margin-bottom: 5px;
-      color: #007bff;
-    }
-
-    .simple-notification {
-      background: #28a745;
-      color: white;
-      padding: 10px;
-      border-radius: 5px;
-      text-align: center;
-      margin: 10px 0;
-    }
-
-    .proxy-info {
-      background: #1a3a5f;
-      color: white;
-      padding: 10px;
-      border-radius: 5px;
-      margin: 10px 0;
-      border-left: 4px solid #007bff;
-    }
-
-    .proxy-ip {
-      font-family: monospace;
-      font-weight: bold;
-      background: #2d2d2d;
-      padding: 5px 10px;
-      border-radius: 3px;
-      margin: 5px 0;
-      display: inline-block;
-    }
-
-    /* Wildcard Domain Styles */
-    .wildcard-domain-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px;
-      margin: 5px 0;
-      background: #3d3d3d;
-      border-radius: 5px;
-      word-break: break-all;
-    }
-
-    .wildcard-domain-actions {
-      display: flex;
-      gap: 5px;
-      flex-shrink: 0;
-    }
-
-    .auto-discover-status {
-      background: #2d2d2d;
-      padding: 10px;
-      border-radius: 5px;
-      margin: 10px 0;
-      border-left: 4px solid #007bff;
-    }
-
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid #444;
-      margin-bottom: 15px;
-    }
-
-    .tab {
-      padding: 10px 20px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-    }
-
-    .tab.active {
-      border-bottom: 2px solid #007bff;
-      color: #007bff;
-    }
-
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
-    }
-
-    .progress-bar {
-      background: #1a1a1a;
-      border-radius: 5px;
-      margin: 10px 0;
-      height: 20px;
-      overflow: hidden;
-    }
-
-    .progress {
-      background: #007bff;
+    
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
       height: 100%;
-      width: 0%;
-      transition: width 0.3s ease;
+      background: radial-gradient(circle at 20% 50%, rgba(102, 126, 234, 0.1) 0%, transparent 50%),
+                  radial-gradient(circle at 80% 80%, rgba(118, 75, 162, 0.1) 0%, transparent 50%);
+      pointer-events: none;
+      z-index: 0;
     }
-
-    /* User Detail Styles */
-    .user-detail-section {
-      margin-bottom: 20px;
-      padding: 15px;
-      background: #3d3d3d;
-      border-radius: 8px;
+    
+    .navbar-glass {
+      background: rgba(15, 20, 40, 0.7);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(102, 126, 234, 0.3);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      padding: 0.8rem 0;
     }
-
-    .user-detail-section h4 {
-      margin-bottom: 15px;
-      color: #007bff;
-      border-bottom: 1px solid #444;
-      padding-bottom: 8px;
+    
+    .navbar-brand {
+      font-size: 1.5rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #fff, #a8b5ff);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      letter-spacing: 0.5px;
     }
-
-    .account-detail-card {
-      background: #2d2d2d;
-      border-radius: 8px;
-      padding: 15px;
-      margin: 10px 0;
-      border-left: 4px solid #007bff;
+    
+    .navbar-brand i {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
     }
-
-    .beta-tag {
-      background: #28a745;
-      color: white;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 11px;
-      margin-left: 5px;
+    
+    .status-badge {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1050;
     }
-
-    .plan-badge {
-      background: #ffc107;
-      color: black;
-      padding: 3px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: bold;
-    }
-
-    /* Close button improvements */
-    .modal-close-btn {
-      position: absolute;
-      top: 15px;
-      right: 15px;
-      background: #dc3545;
-      color: white;
+    
+    .status-connected {
+      background: linear-gradient(135deg, #00b09b, #96c93d);
       border: none;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
+      padding: 8px 16px;
+      border-radius: 50px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      box-shadow: 0 0 15px rgba(0, 176, 155, 0.6);
+      animation: blinkGreen 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes blinkGreen {
+      0%, 100% {
+        opacity: 1;
+        box-shadow: 0 0 5px rgba(0, 176, 155, 0.4);
+      }
+      50% {
+        opacity: 0.85;
+        box-shadow: 0 0 20px rgba(0, 176, 155, 0.8), 0 0 30px rgba(150, 201, 61, 0.4);
+      }
+    }
+    
+    .card-modern {
+      background: rgba(15, 25, 45, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+      border-radius: 20px;
+      color: #fff;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+    }
+    
+    .card-modern:hover {
+      transform: translateY(-5px);
+      border-color: rgba(102, 126, 234, 0.6);
+      box-shadow: 0 12px 40px rgba(102, 126, 234, 0.2);
+    }
+    
+    .card-header {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+      border-bottom: 1px solid rgba(102, 126, 234, 0.2);
+      padding: 1rem 1.25rem;
+      font-weight: 600;
+    }
+    
+    .card-header h5 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+    
+    .form-control, .form-select {
+      background: rgba(10, 20, 40, 0.8);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+      color: #fff;
+      border-radius: 12px;
+      padding: 0.6rem 1rem;
+      transition: all 0.3s ease;
+    }
+    
+    .form-control:focus, .form-select:focus {
+      background: rgba(10, 20, 40, 0.9);
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+      color: #fff;
+    }
+    
+    .form-control::placeholder {
+      color: rgba(255, 255, 255, 0.5);
+    }
+    
+    .btn-gradient {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      color: white;
+      border-radius: 12px;
+      padding: 0.6rem 1.5rem;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .btn-gradient:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+      color: white;
+    }
+    
+    .btn-gradient:active {
+      transform: translateY(0);
+    }
+    
+    .btn-outline-info {
+      border-color: rgba(102, 126, 234, 0.5);
+      color: #a8b5ff;
+      border-radius: 12px;
+    }
+    
+    .btn-outline-info:hover {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-color: transparent;
+      color: white;
+    }
+    
+    .worker-item {
+      background: rgba(20, 30, 55, 0.6);
+      backdrop-filter: blur(5px);
+      border: 1px solid rgba(102, 126, 234, 0.2);
+      border-radius: 14px;
+      transition: all 0.3s ease;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 18px;
-      font-weight: bold;
     }
-
-    .modal-close-btn:hover {
-      background: #c82333;
+    
+    .worker-item:hover {
+      background: rgba(30, 45, 75, 0.8);
+      border-color: #667eea;
+      transform: translateX(5px);
     }
-
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 15px;
-      border-bottom: 1px solid #444;
+    
+    .worker-url {
+      font-size: 0.75rem;
+      color: #00b09b;
+      word-break: break-all;
+    }
+    
+    .copy-url-btn {
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .copy-url-btn:hover {
+      color: #667eea !important;
+      transform: scale(1.1);
+    }
+    
+    .editor-container {
+      position: relative;
+      height: 45vh;
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(10, 20, 35, 0.9);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+    }
+    
+    #editor, #highlighting {
+      margin: 0;
+      padding: 15px;
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      tab-size: 2;
+      box-sizing: border-box;
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    #editor {
+      color: transparent;
+      background: transparent !important;
+      caret-color: #667eea;
+      z-index: 1;
+      resize: none;
+      outline: none;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    #highlighting {
+      z-index: 0;
+      pointer-events: none;
+      background: transparent !important;
+    }
+    
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(135deg, #764ba2, #667eea);
+    }
+    
+    .toast-custom {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1050;
+      min-width: 300px;
+      animation: slideUp 0.3s ease-out;
+    }
+    
+    @keyframes slideUp {
+      from {
+        transform: translateX(-50%) translateY(100px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+      }
+    }
+    
+    .mode-option {
+      cursor: pointer;
+      transition: all 0.3s ease;
+      border: 2px solid rgba(102, 126, 234, 0.3);
+      border-radius: 16px;
+      background: rgba(20, 30, 55, 0.5);
+    }
+    
+    .mode-option:hover {
+      background: rgba(102, 126, 234, 0.2);
+      transform: scale(1.02);
+      border-color: #667eea;
+    }
+    
+    .mode-option.selected {
+      border-color: #00b09b;
+      background: linear-gradient(135deg, rgba(0, 176, 155, 0.2), rgba(150, 201, 61, 0.1));
+      box-shadow: 0 0 20px rgba(0, 176, 155, 0.3);
+    }
+    
+    .domain-item {
+      background: rgba(20, 30, 55, 0.5);
+      border-radius: 12px;
+      transition: all 0.3s ease;
+      border: 1px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    .domain-item:hover {
+      transform: translateX(5px);
+      background: rgba(30, 45, 75, 0.7);
+      border-color: #667eea;
+    }
+    
+    .file-upload-area {
+      border: 2px dashed rgba(102, 126, 234, 0.4);
+      border-radius: 16px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: rgba(20, 30, 55, 0.5);
+    }
+    
+    .file-upload-area:hover {
+      border-color: #667eea;
+      background: rgba(102, 126, 234, 0.1);
+    }
+    
+    .file-upload-area.dragover {
+      border-color: #00b09b;
+      background: rgba(0, 176, 155, 0.1);
+    }
+    
+    .bulk-actions-bar {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+      border-radius: 14px;
+      padding: 12px 16px;
+      margin-bottom: 15px;
+      border: 1px solid rgba(102, 126, 234, 0.4);
+      backdrop-filter: blur(5px);
+    }
+    
+    .offcanvas {
+      background: rgba(15, 20, 40, 0.95);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid rgba(102, 126, 234, 0.3);
+    }
+    
+    .config-modal {
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .card-modern {
+      animation: fadeIn 0.5s ease-out;
+    }
+    
+    .container {
+      position: relative;
+      z-index: 1;
+    }
+    
+    .badge {
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    
+    .text-muted {
+      color: rgba(255, 255, 255, 0.6) !important;
+    }
+    
+    .dropdown-menu-dark {
+      background: rgba(20, 30, 55, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+    }
+    
+    .dropdown-item {
+      color: #e0e0e0;
+    }
+    
+    .dropdown-item:hover {
+      background: rgba(102, 126, 234, 0.3);
+      color: white;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="logo">Cloudflare Worker Manager</div>
-      <div>
-        <button class="btn" id="loginBtn">Add Account</button>
-        <button class="btn" id="createWorkerBtn" style="display:none;">Create Worker</button>
-        <button class="btn" id="bulkCreateBtn" style="display:none;">Bulk Create</button>
-        <button class="btn btn-warning" id="wildcardBtn" style="display:none;">Wildcard Domain</button>
-        <div class="actions-dropdown" id="bulkActionsDropdown" style="display:none;">
-          <button class="btn btn-warning">Bulk Actions ▼</button>
-          <div class="dropdown-content">
-            <a onclick="showBulkActionsModal()">Manage Selected Workers</a>
-          </div>
-        </div>
-        <button class="btn btn-info" id="exportConfigBtn" style="display:none;">Export Config</button>
-      </div>
-    </header>
-
-    <div id="accountsPanel" class="accounts-panel" style="display:none;">
-      <h3>Active Accounts:</h3>
-      <div class="accounts-dropdown">
-        <div class="current-account" id="currentAccountDisplay">
-          <span id="currentAccountEmail">No account selected</span>
-          <span>▼</span>
-        </div>
-        <div class="accounts-dropdown-content" id="accountsDropdownList"></div>
-      </div>
-      <div id="otherAccounts" style="margin-top: 10px; display: none;">
-        <small>Other accounts: <span id="otherAccountsCount">0</span> more</small>
-      </div>
-    </div>
-
-    <div id="accountStatus" class="card">
-      <h3>Status: <span id="statusText">Not Logged In</span></h3>
-      <div id="loginForm">
-        <div class="form-group">
-          <label class="form-label">Email:</label>
-          <input type="email" class="form-input" id="email" placeholder="your-email@example.com">
-        </div>
-        <div class="form-group">
-          <label class="form-label">API Key:</label>
-          <input type="password" class="form-input" id="apiKey" placeholder="Global API Key">
-        </div>
-        <button class="btn" id="submitLogin">Login</button>
-      </div>
-      <div id="accountInfo" style="display:none;">
-        <p>Current Account: <span id="userEmail"></span></p>
-        <div class="form-group">
-          <label class="form-label">Select Cloudflare Account:</label>
-          <select class="form-input" id="accountSelect"></select>
-        </div>
-        <button class="btn btn-info" id="userDetailBtn">View User Details</button>
-        <button class="btn btn-danger" id="logoutBtn">Logout Current</button>
-        <button class="btn btn-danger" id="logoutAllBtn">Logout All</button>
-      </div>
-    </div>
-
-    <div id="workersSection" class="card" style="display:none;">
-      <h3>Your Workers (All Accounts)
-        <span id="selectedCount" style="font-size: 14px; background: #007bff; padding: 2px 8px; border-radius: 10px; display: none;">
-          Selected: <span id="selectedCountNumber">0</span>
-        </span>
-      </h3>
-
-      <div class="search-filter">
-        <input type="text" class="form-input" id="searchWorkers" placeholder="Search workers by name...">
-        <select class="form-input" id="filterAccount">
-          <option value="">All Accounts</option>
-        </select>
-        <button class="btn" id="clearSearch">Clear</button>
-      </div>
-
-      <div class="auto-refresh">
-        <label>
-          <input type="checkbox" id="autoRefreshToggle"> Auto Refresh
-        </label>
-        <select class="form-input" id="autoRefreshInterval" style="width: 150px;">
-          <option value="30">30 seconds</option>
-          <option value="60">1 minute</option>
-          <option value="300">5 minutes</option>
-        </select>
-        <span id="autoRefreshStatus">Off</span>
-      </div>
-
-      <div>
-        <button class="btn" id="refreshWorkers">Refresh</button>
-        <button class="btn btn-warning" id="selectAllBtn">Select All</button>
-        <button class="btn btn-warning" id="deselectAllBtn">Deselect All</button>
-        <button class="btn btn-info" id="analyticsBtn">View Analytics</button>
-      </div>
-      <div id="workersList"></div>
-    </div>
-
-    <!-- Create Worker Modal -->
-    <div id="createWorkerModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Create New Worker</h3>
-          <button class="modal-close-btn" id="cancelCreateWorker">×</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Select Account:</label>
-          <select class="form-input" id="createAccountSelect"></select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Worker Name:</label>
-          <input type="text" class="form-input" id="workerName" placeholder="my-worker">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Select Template:</label>
-          <select class="form-input" id="workerTemplate">
-            <option value="custom">Custom URL</option>
-            <option value="proxy-checker">PROXY CHECKER</option>
-            <option value="nautica-mod">NAUTICA MOD</option>
-            <option value="nautica">NAUTICA</option>
-            <option value="Gateway">Gateway</option>
-            <option value="GatewayMod">Gateway Mod</option>
-            <option value="vmess">Vmess</option>
-            <option value="vmessMod">Vmess Mod</option>
-           <option value="Green-jossvpn">Green-jossvpn</option>
-          </select>
-        </div>
-        <div class="form-group" id="customUrlGroup">
-          <label class="form-label">Script URL (optional):</label>
-          <input type="text" class="form-input" id="scriptUrl" value="https://r2.lifetime69.workers.dev/raw/ffdr6xgncp7mkfcd6mj">
-          <small style="color: #ccc;">Nama file GitHub bisa bebas, tidak harus worker.js</small>
-        </div>
-
-        <!-- Proxy IP Info untuk NAUTICA -->
-        <div id="proxyInfo" class="proxy-info" style="display: none;">
-          <h4>🔒 NAUTICA Proxy Information</h4>
-          <p>Template NAUTICA akan menggunakan proxy IP acak dari:</p>
-          <p><code>https://r2.lifetime69.workers.dev/raw/bj3yy7362a9mkfcjltj</code></p>
-          <p>Proxy IP yang akan digunakan: <span id="currentProxyIP" class="proxy-ip">Loading...</span></p>
-          <button type="button" class="btn btn-warning btn-small" id="refreshProxyBtn">Refresh Proxy IP</button>
-        </div>
-
-        <div id="createResult" style="display:none;"></div>
-        <button class="btn btn-success" id="submitCreateWorker">Create Worker</button>
-      </div>
-    </div>
-
-    <!-- Edit Worker Modal -->
-    <div id="editWorkerModal" class="modal">
-      <div class="modal-content modal-large">
-        <div class="modal-header">
-          <h3>Edit Worker Script</h3>
-          <button class="modal-close-btn" id="cancelEditWorker">×</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Worker Name:</label>
-          <input type="text" class="form-input" id="editWorkerName" readonly>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Account:</label>
-          <input type="text" class="form-input" id="editWorkerAccount" readonly>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Script Content:</label>
-          <textarea class="form-input form-textarea" id="editWorkerScript" placeholder="Loading script..."></textarea>
-        </div>
+  <nav class="navbar navbar-glass fixed-top">
+    <div class="container-fluid px-4">
+      <div class="d-flex align-items-center gap-3">
+        <button class="btn btn-outline-info rounded-circle" style="width: 40px; height: 40px;" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarCanvas">
+          <i class="fas fa-user-astronaut"></i>
+        </button>
         <div>
-          <button class="btn btn-success" id="submitEditWorker">Update Worker</button>
-          <button class="btn" id="reloadScriptBtn">Reload Script</button>
+          <span class="navbar-brand mb-0 fs-1">
+            <i class="fas fa-cloud-upload-alt me-2"></i>
+            CFM
+          </span>
+          <small class="text-muted d-block" style="font-size: 0.7rem;">Cloudflare Workers Management System</small>
+        </div>
+      </div>
+      <div class="status-badge">
+        <div class="badge status-connected" id="statusBadge" style="display: none;">
+          <i class="fas fa-plug me-1"></i> 
+          <span id="connectionStatus">Connected</span>
+          <i class="fas fa-circle ms-1" style="font-size: 8px; color: #00ff00;"></i>
         </div>
       </div>
     </div>
+  </nav>
 
-    <!-- Bulk Create Modal -->
-    <div id="bulkCreateModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Bulk Create Workers</h3>
-          <button class="modal-close-btn" id="cancelBulkCreate">×</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Select Accounts (multiple):</label>
-          <select class="form-input" id="bulkAccountsSelect" multiple style="height: 150px;"></select>
-          <small>Hold Ctrl/Cmd to select multiple accounts</small>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Worker Name:</label>
-          <input type="text" class="form-input" id="bulkWorkerName" placeholder="my-worker">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Select Template:</label>
-          <select class="form-input" id="bulkWorkerTemplate">
-            <option value="custom">Custom URL</option>
-            <option value="proxy-checker">PROXY CHECKER</option>
-            <option value="nautica-mod">NAUTICA MOD</option>
-            <option value="nautica">NAUTICA</option>
-            <option value="Gateway">Gateway</option>
-            <option value="GatewayMod">GatewayMod</option>
-            <option value="vmess">Vmess</option>
-           <option value="vmessMod">VmessMod</option>
-           <option value="Green-jossvpn">Green-jossvpn</option>
-          </select>
-        </div>
-        <div class="form-group" id="bulkCustomUrlGroup">
-          <label class="form-label">Script URL (optional):</label>
-          <input type="text" class="form-input" id="bulkScriptUrl" value="https://r2.lifetime69.workers.dev/raw/ffdr6xgncp7mkfcd6mj">
-          <small style="color: #ccc;">Nama file GitHub bisa bebas, tidak harus worker.js</small>
-        </div>
-
-        <!-- Proxy IP Info untuk Bulk NAUTICA -->
-        <div id="bulkProxyInfo" class="proxy-info" style="display: none;">
-          <h4>🔒 NAUTICA Proxy Information</h4>
-          <p>Template NAUTICA akan menggunakan proxy IP acak dari:</p>
-          <p><code>https://r2.lifetime69.workers.dev/raw/bj3yy7362a9mkfcjltj</code></p>
-          <p>Setiap worker akan mendapatkan proxy IP yang berbeda secara acak.</p>
-        </div>
-
-        <div class="progress-bar">
-          <div class="progress" id="bulkProgress"></div>
-        </div>
-        <div id="bulkResults"></div>
-        <button class="btn btn-success" id="submitBulkCreate">Start Bulk Create</button>
-      </div>
+  <div class="offcanvas offcanvas-start" tabindex="-1" id="sidebarCanvas" aria-labelledby="sidebarLabel">
+    <div class="offcanvas-header border-bottom" style="border-color: rgba(102, 126, 234, 0.3) !important;">
+      <h5 class="offcanvas-title" id="sidebarLabel">
+        <i class="fas fa-cloud me-2"></i>Cloudflare Account
+      </h5>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
     </div>
-
-    <!-- Wildcard Domain Modal -->
-    <div id="wildcardModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>🌐 Wildcard Domain Registration</h3>
-          <button class="modal-close-btn" id="cancelWildcard">×</button>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Select Account:</label>
-          <select class="form-input" id="wildcardAccountSelect"></select>
-        </div>
-
-        <!-- Dropdown untuk memilih Worker -->
-        <div class="form-group">
-          <label class="form-label">Select Worker:</label>
-          <select class="form-input" id="wildcardWorkerSelect">
-            <option value="">Loading workers...</option>
-          </select>
-          <small style="color: #ccc;">Pilih worker yang akan menangani domain wildcard</small>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Full Domain to Register:</label>
-          <input type="text" class="form-input" id="fullSubdomain" placeholder="contoh: api.example.com">
-          <small style="color: #ccc;" id="domainHelpText">Masukkan lengkap domain yang ingin didaftarkan. Untuk wildcard gunakan format: subdomain-anda.domain-anda.com</small>
-        </div>
-
-        <!-- Auto-detected info -->
-        <div id="autoDetectedInfo" style="display: none; background: #1a3a5f; padding: 15px; border-radius: 5px; margin: 15px 0;">
-          <h4>🔍 Auto-Detected Configuration:</h4>
-          <div class="user-info-item">
-            <span class="user-info-label">Account ID:</span>
-            <span class="user-info-value" id="detectedAccountId">-</span>
-          </div>
-          <div class="user-info-item">
-            <span class="user-info-label">Zone ID:</span>
-            <span class="user-info-value" id="detectedZoneId">-</span>
-          </div>
-          <div class="user-info-item">
-            <span class="user-info-label">Service Name:</span>
-            <span class="user-info-value" id="detectedServiceName">-</span>
-          </div>
-          <div class="user-info-item">
-            <span class="user-info-label">Root Domain:</span>
-            <span class="user-info-value" id="detectedRootDomain">-</span>
-          </div>
-        </div>
-
-        <div id="wildcardResult" style="display:none;"></div>
-
-        <div class="form-group">
-          <button class="btn btn-success" id="submitWildcard">Register Domain</button>
-          <button class="btn btn-info" id="listWildcardBtn">List Registered Domains</button>
-          <button class="btn btn-warning" id="autoDiscoverBtn">Auto Discover Config</button>
-        </div>
-
-        <div id="wildcardList" style="margin-top: 20px; display: none;">
-          <h4>Registered Domains:</h4>
-          <div id="domainsList" style="max-height: 200px; overflow-y: auto; background: #3d3d3d; padding: 10px; border-radius: 5px;"></div>
+    <div class="offcanvas-body">
+      <div class="mb-4">
+        <label class="form-label text-light fw-bold">📧 Select Account:</label>
+        <select id="accSelectorSidebar" class="form-select" onchange="switchAccountSidebar()"></select>
+      </div>
+      
+      <div id="addAccFormSidebar" class="mb-4" style="display: none;">
+        <input id="accEmailSidebar" type="email" class="form-control mb-2" placeholder="Email Cloudflare">
+        <input id="accKeySidebar" type="password" class="form-control mb-2" placeholder="Global API Key">
+        <div class="d-flex gap-2">
+          <button onclick="saveAccountSidebar()" class="btn btn-gradient flex-grow-1">
+            <i class="fas fa-save me-1"></i> Simpan
+          </button>
+          <button onclick="toggleAddFormSidebar()" class="btn btn-secondary flex-grow-1">Batal</button>
         </div>
       </div>
-    </div>
-
-    <!-- Bulk Actions Modal -->
-    <div id="bulkActionsModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Bulk Operations</h3>
-          <button class="modal-close-btn" id="cancelBulkActions">×</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Selected Workers: <span id="bulkSelectedCount">0</span></label>
-          <div id="bulkSelectedList" style="max-height: 200px; overflow-y: auto; background: #3d3d3d; padding: 10px; border-radius: 5px;"></div>
-        </div>
-        <div class="form-group">
-          <button class="btn btn-danger" id="bulkDeleteBtn" style="width: 100%;">Delete Selected Workers</button>
-        </div>
+      
+      <div id="accActionBtnsSidebar">
+        <button onclick="toggleAddFormSidebar()" class="btn btn-outline-info w-100 mb-2">
+          <i class="fas fa-plus me-2"></i>Tambah Akun Baru
+        </button>
+        <button onclick="deleteAccountSidebar()" class="btn btn-outline-danger w-100">
+          <i class="fas fa-trash-alt me-2"></i>Hapus Akun
+        </button>
+      </div>
+      
+      <hr class="my-4" style="border-color: rgba(102, 126, 234, 0.3);">
+      
+      <div class="text-center">
+        <i class="fas fa-shield-alt fa-2x mb-2" style="color: #667eea;"></i>
+        <p class="small text-muted">Secure Connection via Cloudflare API</p>
       </div>
     </div>
+  </div>
 
-    <!-- Analytics Modal -->
-    <div id="analyticsModal" class="modal">
-      <div class="modal-content modal-large">
-        <div class="modal-header">
-          <h3>Worker Analytics</h3>
-          <button class="modal-close-btn" id="cancelAnalytics">×</button>
-        </div>
-        <div class="tabs">
-          <div class="tab active" data-tab="overview">Overview</div>
-          <div class="tab" data-tab="performance">Performance</div>
-          <div class="tab" data-tab="requests">Requests</div>
-        </div>
-
-        <div class="tab-content active" id="overviewTab">
-          <div class="analytics-grid">
-            <div class="analytics-card">
-              <div class="analytics-label">Total Requests</div>
-              <div class="analytics-value" id="totalRequests">0</div>
-            </div>
-            <div class="analytics-card">
-              <div class="analytics-label">Success Rate</div>
-              <div class="analytics-value" id="successRate">0%</div>
-            </div>
-            <div class="analytics-card">
-              <div class="analytics-label">Avg Response Time</div>
-              <div class="analytics-value" id="avgResponseTime">0ms</div>
-            </div>
-            <div class="analytics-card">
-              <div class="analytics-label">CPU Time</div>
-              <div class="analytics-value" id="cpuTime">0ms</div>
-            </div>
+  <div class="container mt-3 pt-3" style="margin-top: 100px !important;">
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="card card-modern mb-4">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="card-title mb-0">
+              <i class="fas fa-server me-2 text-info"></i>Worker List
+            </h5>
+            <button onclick="fetchList()" class="btn btn-sm btn-gradient">
+              <i class="fas fa-sync-alt me-1"></i> Refresh
+            </button>
+          </div>
+          <div class="card-body">
+            <div id="workerListContainer" class="worker-list-scroll" style="max-height: 400px; overflow-y: auto;"></div>
           </div>
         </div>
 
-        <div class="tab-content" id="performanceTab">
-          <h4>Performance Metrics</h4>
-          <div class="stats-grid">
-            <div class="stat-item">
-              <div class="analytics-label">P95 Response</div>
-              <div class="analytics-value" id="p95Response">0ms</div>
+        <div class="card card-modern">
+          <div class="card-header">
+            <h5 class="card-title mb-0">
+              <i class="fas fa-globe me-2 text-success"></i>Custom Domain Manager
+            </h5>
+          </div>
+          <div class="card-body">
+            <div class="d-flex gap-2 mb-3">
+              <select id="customDomainSelect" class="form-select" disabled>
+                <option>Pilih Worker terlebih dahulu</option>
+              </select>
+              <button onclick="loadCustomDomains()" class="btn btn-gradient" id="loadDomainsBtn" disabled>
+                <i class="fas fa-sync-alt"></i>
+              </button>
             </div>
-            <div class="stat-item">
-              <div class="analytics-label">P99 Response</div>
-              <div class="analytics-value" id="p99Response">0ms</div>
+            <div id="domainList" class="domain-list-scroll mb-3" style="max-height: 250px; overflow-y: auto;"></div>
+            
+            <div class="btn-group w-100 mb-3" role="group">
+              <button type="button" id="modeSingleBtn" class="btn btn-outline-info mode-toggle active" onclick="setMode('single')">
+                <i class="fas fa-plus-circle me-1"></i> Single Mode
+              </button>
+              <button type="button" id="modeMultipleBtn" class="btn btn-outline-info mode-toggle" onclick="setMode('multiple')">
+                <i class="fas fa-layer-group me-1"></i> Multiple Mode
+              </button>
             </div>
-            <div class="stat-item">
-              <div class="analytics-label">Cache Hit Rate</div>
-              <div class="analytics-value" id="cacheHitRate">0%</div>
+            
+            <div id="singleModeForm">
+              <div id="addDomainForm" style="display: none;">
+                <input type="text" id="newDomain" class="form-control mb-2" placeholder="Contoh: api" />
+                <small class="text-muted mb-2 d-block">⚠️ Masukkan subdomain saja (zone akan otomatis ditambahkan)</small>
+                <select id="zoneSelect" class="form-select mb-2"></select>
+                <div class="d-flex gap-2">
+                  <button onclick="attachCustomDomain()" class="btn btn-gradient flex-grow-1">
+                    <i class="fas fa-link me-1"></i> Attach Domain
+                  </button>
+                  <button onclick="toggleAddDomainForm()" class="btn btn-secondary flex-grow-1">Batal</button>
+                </div>
+              </div>
+              <div style="width: fit-content; margin: 0 auto;">
+                <button onclick="toggleAddDomainForm()" class="btn btn-gradient" id="showAddBtn">
+                  <i class="fas fa-plus-circle me-1"></i> Tambah Custom Domain
+                </button>
+              </div>
+            </div>
+            
+            <div id="multipleModeForm" style="display: none;">
+              <textarea id="multipleDomains" class="form-control mb-2" rows="3" placeholder="Masukkan multiple subdomain&#10;Contoh:&#10;api&#10;cdn&#10;app"></textarea>
+              <small class="text-muted mb-2 d-block">✅ Pisahkan dengan baris baru atau koma</small>
+              <select id="zoneSelectMultiple" class="form-select mb-2"></select>
+              <div class="d-flex gap-2">
+                <button onclick="attachMultipleDomains()" class="btn btn-gradient flex-grow-1">
+                  <i class="fas fa-layer-group me-1"></i> Attach All
+                </button>
+                <button onclick="clearMultipleInput()" class="btn btn-secondary flex-grow-1">
+                  <i class="fas fa-eraser me-1"></i> Clear
+                </button>
+              </div>
+              <div id="multipleResult" class="mt-3" style="display: none;"></div>
             </div>
           </div>
-        </div>
-
-        <div class="tab-content" id="requestsTab">
-          <h4>Request Distribution</h4>
-          <div id="requestDistribution"></div>
         </div>
       </div>
-    </div>
 
-    <!-- User Details Modal -->
-    <div id="userDetailModal" class="modal">
-      <div class="modal-content" style="max-width: 800px;">
-        <div class="modal-header">
-          <h3>👤 User Details & Account Information</h3>
-          <button class="modal-close-btn" id="cancelUserDetail">×</button>
-        </div>
-        <div id="userDetailContent"></div>
-      </div>
-    </div>
-
-    <!-- Config Results Modal -->
-    <div id="configResultsModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Worker Configuration</h3>
-          <button class="modal-close-btn" id="cancelConfigResults">×</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Worker Name:</label>
-          <input type="text" class="form-input" id="configWorkerName" readonly>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Account:</label>
-          <input type="text" class="form-input" id="configWorkerAccount" readonly>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Configuration:</label>
-          <div id="configResultsContent"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Export/Import Modal -->
-    <div id="configModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Configuration Management</h3>
-          <button class="modal-close-btn" id="cancelConfigModal">×</button>
-        </div>
-        <div class="tabs">
-          <div class="tab active" data-tab="export">Export</div>
-          <div class="tab" data-tab="import">Import</div>
-        </div>
-
-        <div class="tab-content active" id="exportTab">
-          <div class="form-group">
-            <label class="form-label">Configuration Data:</label>
-            <textarea class="form-input form-textarea" id="exportData" readonly style="height: 300px;"></textarea>
+      <div class="col-lg-6">
+        <div class="card card-modern">
+          <div class="card-header">
+            <h5 class="card-title mb-0">
+              <i class="fas fa-code me-2 text-warning"></i>Code Editor
+            </h5>
           </div>
-          <button class="btn btn-success" id="copyExportBtn">Copy to Clipboard</button>
-          <button class="btn btn-info" id="downloadExportBtn">Download as File</button>
-        </div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label fw-bold mb-3">📋 Select Input Method:</label>
+              <div class="row g-3">
+                <div class="col-6">
+                  <div id="modeImportUrl" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('url')">
+                    <i class="fas fa-link fa-2x mb-2" style="color: #667eea;"></i>
+                    <div class="fw-bold small">Import from URL</div>
+                    <small class="text-muted">GitHub/Raw</small>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div id="modeImportFile" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('file')">
+                    <i class="fas fa-file-upload fa-2x mb-2" style="color: #667eea;"></i>
+                    <div class="fw-bold small">Upload File</div>
+                    <small class="text-muted">From Computer</small>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div id="modeManual" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('manual')">
+                    <i class="fas fa-edit fa-2x mb-2" style="color: #667eea;"></i>
+                    <div class="fw-bold small">Manual Edit</div>
+                    <small class="text-muted">Write Code</small>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div id="modeUpdate" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('update')">
+                    <i class="fas fa-sync-alt fa-2x mb-2" style="color: #667eea;"></i>
+                    <div class="fw-bold small">Update Worker</div>
+                    <small class="text-muted">From Existing</small>
+                  </div>
+                </div>
+              </div>
+            </div>
 
-        <div class="tab-content" id="importTab">
-          <div class="form-group">
-            <label class="form-label">Paste Configuration Data:</label>
-            <textarea class="form-input form-textarea" id="importData" placeholder="Paste your configuration JSON here..." style="height: 300px;"></textarea>
+            <div id="editorPanel" style="display: none;">
+              <div id="panelImportUrl" class="editor-mode-card mb-3" style="display: none;">
+                <label class="form-label">🔗 Worker Code URL:</label>
+                <div class="input-group">
+                  <input type="text" id="githubUrl" class="form-control" placeholder="https://raw.githubusercontent.com/.../worker.js" />
+                  <button onclick="importFromUrl()" class="btn btn-gradient">
+                    <i class="fas fa-download me-1"></i> Import
+                  </button>
+                </div>
+                <div class="import-examples mt-2 small">
+                  <span class="text-muted">📌 Examples:</span>
+                  <span onclick="setExampleUrl('https://raw.githubusercontent.com/example/worker.js')" class="text-info" style="cursor: pointer;">GitHub Raw</span>
+                </div>
+              </div>
+
+              <div id="panelImportFile" class="editor-mode-card mb-3" style="display: none;">
+                <label class="form-label">📁 Select File:</label>
+                <div id="fileUploadArea" class="file-upload-area" onclick="document.getElementById('fileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleFileDrop(event)">
+                  <i class="fas fa-cloud-upload-alt fa-2x mb-2"></i>
+                  <p class="mb-1">Click or drag & drop file here</p>
+                  <small class="text-muted">Support: .js, .txt, .mjs</small>
+                  <input type="file" id="fileInput" style="display: none;" accept=".js,.txt,.mjs,.cjs" onchange="handleFileSelect(event)" />
+                </div>
+              </div>
+
+              <div id="panelManual" class="editor-mode-card mb-3" style="display: none;">
+                <div class="alert alert-info bg-info bg-opacity-10 border-info text-white small">
+                  <i class="fas fa-info-circle me-1"></i> Edit worker code directly in the editor below
+                </div>
+              </div>
+
+              <div id="panelUpdate" class="editor-mode-card mb-3" style="display: none;">
+                <label class="form-label">📋 Select Worker to Update:</label>
+                <div class="d-flex gap-2 mb-2">
+                  <select id="updateWorkerSelect" class="form-select flex-grow-1">
+                    <option value="">Pilih Worker...</option>
+                  </select>
+                  <button onclick="loadWorkerToEditor()" class="btn btn-gradient">
+                    <i class="fas fa-folder-open me-1"></i> Load
+                  </button>
+                </div>
+                <div class="d-flex gap-2">
+                  <button onclick="copyCodeToClipboard()" class="btn btn-outline-info flex-grow-1" id="copyCodeBtn" disabled>
+                    <i class="fas fa-copy me-1"></i> Copy
+                  </button>
+                  <button onclick="downloadCode()" class="btn btn-outline-info flex-grow-1" id="downloadCodeBtn" disabled>
+                    <i class="fas fa-download me-1"></i> Download
+                  </button>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label fw-bold">✏️ Worker Name:</label>
+                <input type="text" id="newWorkerName" class="form-control" placeholder="contoh: my-worker" />
+                <small class="text-muted">* Isi untuk deploy baru, kosongkan jika update worker yang dipilih</small>
+              </div>
+
+              <div class="editor-container">
+                <textarea id="editor" spellcheck="false" oninput="updateView(); syncScroll();" onscroll="syncScroll();"></textarea>
+                <pre id="highlighting" aria-hidden="true"><code class="language-javascript" id="highlighting-content"></code></pre>
+              </div>
+
+              <div class="d-flex gap-2 mt-3">
+                <button onclick="deployWorker()" class="btn btn-gradient w-100">
+                  <i class="fas fa-cloud-upload-alt me-2"></i> DEPLOY / UPDATE WORKER
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Or Upload Configuration File:</label>
-            <input type="file" class="form-input" id="importFile" accept=".json">
-          </div>
-          <button class="btn btn-success" id="submitImportBtn">Import Configuration</button>
         </div>
       </div>
     </div>
   </div>
 
-  <div id="bulkActionsBar" class="bulk-actions">
-    <span id="bulkActionsText">0 workers selected</span>
-    <div class="actions-dropdown">
-      <button class="btn btn-danger btn-small">Bulk Actions ▼</button>
-      <div class="dropdown-content">
-        <a onclick="bulkDeleteWorkers()" class="delete-action">Delete Selected Workers</a>
+  <div class="toast-custom" id="toastNotification" style="display: none; z-index: 9999;">
+    <div class="toast show bg-dark bg-opacity-90 text-white border-secondary d-inline-block w-auto" role="alert">
+      <div class="toast-header bg-dark text-white border-bottom-0" id="toastHeader">
+        <i class="fas fa-bell me-2"></i>
+        <strong class="me-auto">Notification</strong>
+        <button type="button" class="btn-close btn-close-white" onclick="hideToast()"></button>
       </div>
+      <div class="toast-body" id="toastMessage"></div>
     </div>
-    <button class="btn btn-warning btn-small" id="bulkBarCloseBtn">Close</button>
   </div>
 
-  <div id="notification" class="notification"></div>
-
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+  
   <script>
-    let users = JSON.parse(localStorage.getItem('cf_users') || '[]');
-    let currentUserIndex = parseInt(localStorage.getItem('cf_current_user') || '0');
-    let allWorkers = [];
+    const $ = id => document.getElementById(id);
+    let accounts = JSON.parse(localStorage.getItem('cf_accounts_v2') || '[]');
+    let currentAcc = null;
+    let workersList = [];
+    let currentWorkerDomains = [];
+    let availableZones = [];
+    let toastTimeout;
+    let currentMode = 'single';
+    let currentEditorMode = null;
+    let currentLoadedWorkerName = null;
     let selectedWorkers = new Set();
-    let currentEditingWorker = null;
-    let autoRefreshInterval = null;
-    let currentSearchTerm = '';
-    let currentFilterAccount = '';
-    let currentWildcardConfig = null;
 
-    // Initialize
-    document.addEventListener('DOMContentLoaded', function() {
-      setupEventListeners();
-      if (users.length > 0) {
-        updateUI();
-        fetchAllWorkers();
-      }
-    });
-
-    function setupEventListeners() {
-      document.getElementById('loginBtn').addEventListener('click', function() {
-        document.getElementById('loginForm').style.display = 'block';
-      });
-
-      document.getElementById('submitLogin').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', logoutCurrent);
-      document.getElementById('logoutAllBtn').addEventListener('click', logoutAll);
-      document.getElementById('userDetailBtn').addEventListener('click', showUserDetail);
-      document.getElementById('createWorkerBtn').addEventListener('click', showCreateWorkerModal);
-      document.getElementById('bulkCreateBtn').addEventListener('click', showBulkCreateModal);
-      document.getElementById('wildcardBtn').addEventListener('click', showWildcardModal);
-      document.getElementById('exportConfigBtn').addEventListener('click', showExportConfig);
-
-      // Close buttons - FIXED: Added proper event listeners
-      document.getElementById('cancelCreateWorker').addEventListener('click', hideCreateWorkerModal);
-      document.getElementById('cancelEditWorker').addEventListener('click', hideEditWorkerModal);
-      document.getElementById('cancelBulkCreate').addEventListener('click', hideBulkCreateModal);
-      document.getElementById('cancelWildcard').addEventListener('click', hideWildcardModal);
-      document.getElementById('cancelBulkActions').addEventListener('click', hideBulkActionsModal);
-      document.getElementById('cancelAnalytics').addEventListener('click', hideAnalyticsModal);
-      document.getElementById('cancelUserDetail').addEventListener('click', hideUserDetailModal);
-      document.getElementById('cancelConfigResults').addEventListener('click', hideConfigResultsModal);
-      document.getElementById('cancelConfigModal').addEventListener('click', hideConfigModal);
-
-      document.getElementById('submitCreateWorker').addEventListener('click', createWorker);
-      document.getElementById('refreshWorkers').addEventListener('click', fetchAllWorkers);
-      document.getElementById('selectAllBtn').addEventListener('click', selectAllWorkers);
-      document.getElementById('deselectAllBtn').addEventListener('click', deselectAllWorkers);
-      document.getElementById('analyticsBtn').addEventListener('click', showAnalyticsModal);
-      document.getElementById('submitEditWorker').addEventListener('click', updateWorker);
-      document.getElementById('reloadScriptBtn').addEventListener('click', reloadWorkerScript);
-      document.getElementById('submitBulkCreate').addEventListener('click', bulkCreateWorkers);
-      document.getElementById('submitWildcard').addEventListener('click', registerWildcard);
-      document.getElementById('listWildcardBtn').addEventListener('click', listWildcardDomains);
-      document.getElementById('autoDiscoverBtn').addEventListener('click', autoDiscoverConfig);
-      document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDeleteWorkers);
-      document.getElementById('bulkBarCloseBtn').addEventListener('click', closeBulkActions);
-      document.getElementById('copyExportBtn').addEventListener('click', copyExportData);
-      document.getElementById('downloadExportBtn').addEventListener('click', downloadExportData);
-      document.getElementById('submitImportBtn').addEventListener('click', importConfig);
-
-      // Template selection untuk proxy IP info
-      document.getElementById('workerTemplate').addEventListener('change', function(e) {
-        document.getElementById('customUrlGroup').style.display = e.target.value === 'custom' ? 'block' : 'none';
-        updateProxyInfoDisplay(e.target.value);
-      });
-
-      document.getElementById('bulkWorkerTemplate').addEventListener('change', function(e) {
-        document.getElementById('bulkCustomUrlGroup').style.display = e.target.value === 'custom' ? 'block' : 'none';
-        updateBulkProxyInfoDisplay(e.target.value);
-      });
-
-      // Refresh proxy IP button
-      document.getElementById('refreshProxyBtn').addEventListener('click', refreshProxyIP);
-
-      // Search and filter
-      document.getElementById('searchWorkers').addEventListener('input', function(e) {
-        currentSearchTerm = e.target.value.toLowerCase();
-        displayWorkers();
-      });
-
-      document.getElementById('filterAccount').addEventListener('change', function(e) {
-        currentFilterAccount = e.target.value;
-        displayWorkers();
-      });
-
-      document.getElementById('clearSearch').addEventListener('click', function() {
-        document.getElementById('searchWorkers').value = '';
-        document.getElementById('filterAccount').value = '';
-        currentSearchTerm = '';
-        currentFilterAccount = '';
-        displayWorkers();
-      });
-
-      // Auto-refresh
-      document.getElementById('autoRefreshToggle').addEventListener('change', function(e) {
-        toggleAutoRefresh(e.target.checked);
-      });
-
-      // File import
-      document.getElementById('importFile').addEventListener('change', handleFileImport);
-
-      // Tabs
-      document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', function(e) {
-          const tabName = e.target.dataset.tab;
-          switchTab(tabName);
-        });
-      });
-
-      // Wildcard account change
-      document.getElementById('wildcardAccountSelect').addEventListener('change', function() {
-        const userIndex = this.value;
-        if (userIndex !== '') {
-          document.getElementById('autoDetectedInfo').style.display = 'none';
-          document.getElementById('wildcardResult').style.display = 'none';
-          document.getElementById('wildcardList').style.display = 'none';
-          document.getElementById('wildcardWorkerSelect').innerHTML = '<option value="">Loading workers...</option>';
-          currentWildcardConfig = null;
-
-          // Load workers untuk dropdown
-          loadWildcardWorkers(parseInt(userIndex));
-        }
-      });
-
-      // Close modal when clicking outside
-      document.addEventListener('click', function(event) {
-        if (event.target.classList.contains('modal')) {
-          event.target.style.display = 'none';
-        }
-      });
-    }
-
-    // Fungsi untuk update display proxy info
-    function updateProxyInfoDisplay(template) {
-      const proxyInfo = document.getElementById('proxyInfo');
-      if (template === 'nautica' || template === 'nautica-mod') {
-        proxyInfo.style.display = 'block';
-        refreshProxyIP();
+    function showToast(message, isError = false) {
+      const toast = $('toastNotification');
+      const header = $('toastHeader');
+      const msgElement = $('toastMessage');
+      
+      if (toastTimeout) clearTimeout(toastTimeout);
+      
+      if (isError) {
+        header.innerHTML = \`
+          <i class="fas fa-exclamation-triangle me-2 text-danger"></i>
+          <strong class="me-auto text-danger">Error</strong>
+          <button type="button" class="btn-close btn-close-white" onclick="hideToast()"></button>
+        \`;
       } else {
-        proxyInfo.style.display = 'none';
+        header.innerHTML = \`
+          <i class="fas fa-check-circle me-2 text-success"></i>
+          <strong class="me-auto text-success">Success</strong>
+          <button type="button" class="btn-close btn-close-white" onclick="hideToast()"></button>
+        \`;
+      }
+      
+      msgElement.textContent = message;
+      toast.style.display = 'block';
+      
+      toastTimeout = setTimeout(() => hideToast(), 5000);
+    }
+    
+    function hideToast() {
+      const toast = $('toastNotification');
+      toast.style.display = 'none';
+      if (toastTimeout) clearTimeout(toastTimeout);
+    }
+
+    function notify(msg, err = false) {
+      showToast(msg, err);
+    }
+    
+    async function copyToClipboard(text, successMsg) {
+      try {
+        await navigator.clipboard.writeText(text);
+        notify(successMsg || \`✅ URL berhasil dicopy: \${text}\`);
+      } catch (err) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        notify(successMsg || \`✅ URL berhasil dicopy: \${text}\`);
       }
     }
 
-    function updateBulkProxyInfoDisplay(template) {
-      const bulkProxyInfo = document.getElementById('bulkProxyInfo');
-      if (template === 'nautica' || template === 'nautica-mod') {
-        bulkProxyInfo.style.display = 'block';
+    function updateSelectionUI() {
+      const selectionBar = document.getElementById('selectionBar');
+      const selectedCount = selectedWorkers.size;
+      
+      if (selectedCount > 0) {
+        if (!selectionBar) {
+          const bar = document.createElement('div');
+          bar.id = 'selectionBar';
+          bar.className = 'bulk-actions-bar d-flex justify-content-between align-items-center';
+          bar.innerHTML = \`
+            <div>
+              <input type="checkbox" id="selectAllCheckbox" class="select-all-checkbox me-2" onchange="toggleSelectAll()">
+              <label class="small">Select All</label>
+            </div>
+            <div>
+              <span class="me-3"><strong id="selectedCountDisplay">\${selectedCount}</strong> selected</span>
+              <button class="btn btn-sm btn-danger" onclick="bulkDeleteWorkers()">
+                <i class="fas fa-trash-alt me-1"></i> Delete Selected
+              </button>
+              <button class="btn btn-sm btn-secondary ms-2" onclick="clearSelection()">
+                <i class="fas fa-times me-1"></i> Close
+              </button>
+            </div>
+          \`;
+          const container = $('workerListContainer');
+          container.parentNode.insertBefore(bar, container);
+        } else {
+          const countDisplay = document.getElementById('selectedCountDisplay');
+          if (countDisplay) countDisplay.innerText = selectedCount;
+          const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+          if (selectAllCheckbox) {
+            selectAllCheckbox.checked = (selectedCount === workersList.length && workersList.length > 0);
+          }
+        }
       } else {
-        bulkProxyInfo.style.display = 'none';
+        if (selectionBar) selectionBar.remove();
       }
     }
-
-    // Fungsi untuk refresh proxy IP
-    async function refreshProxyIP() {
-      const proxyIPElement = document.getElementById('currentProxyIP');
-      proxyIPElement.textContent = 'Loading...';
-
-      try {
-        const response = await fetch('/api/generateProxyIP');
-        const result = await response.json();
-
-        if (result.success) {
-          proxyIPElement.textContent = result.proxyIP;
-        } else {
-          proxyIPElement.textContent = 'Error loading proxy IP';
-        }
-      } catch (error) {
-        proxyIPElement.textContent = 'Error loading proxy IP';
-      }
-    }
-
-    // Fungsi untuk menampilkan modal wildcard
-    function showWildcardModal() {
-      const modal = document.getElementById('wildcardModal');
-      const accountSelect = document.getElementById('wildcardAccountSelect');
-
-      // Isi dropdown dengan akun yang tersedia
-      accountSelect.innerHTML = '';
-      users.forEach((user, index) => {
-        const option = document.createElement('option');
-        option.value = index;
-        option.textContent = user.email + ' (' + (user.accountId || 'Auto-detect') + ')';
-        accountSelect.appendChild(option);
-      });
-
-      // Reset form
-      document.getElementById('fullSubdomain').value = '';
-      document.getElementById('wildcardWorkerSelect').innerHTML = '<option value="">Select account first</option>';
-      document.getElementById('autoDetectedInfo').style.display = 'none';
-      document.getElementById('wildcardResult').style.display = 'none';
-      document.getElementById('wildcardList').style.display = 'none';
-
-      currentWildcardConfig = null;
-
-      modal.style.display = 'flex';
-
-      // Load workers untuk akun pertama
-      if (users.length > 0) {
-        loadWildcardWorkers(0);
-      }
-    }
-
-    function hideWildcardModal() {
-      document.getElementById('wildcardModal').style.display = 'none';
-    }
-
-    // Fungsi untuk memuat workers ke dropdown
-    async function loadWildcardWorkers(userIndex) {
-      const user = users[userIndex];
-      const workerSelect = document.getElementById('wildcardWorkerSelect');
-
-      if (!user.accountId) {
-        workerSelect.innerHTML = '<option value="">No account ID available</option>';
-        return;
-      }
-
-      showNotification('Loading workers...');
-
-      try {
-        const response = await fetch('/api/listWorkers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: user.accountId
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success && result.result && result.result.length > 0) {
-          workerSelect.innerHTML = '';
-          result.result.forEach(worker => {
-            const option = document.createElement('option');
-            option.value = worker.id;
-            option.textContent = worker.id;
-            workerSelect.appendChild(option);
-          });
-          showNotification('Workers loaded successfully');
-        } else {
-          workerSelect.innerHTML = '<option value="">No workers found</option>';
-          showNotification('No workers found for this account', 'warning');
-        }
-      } catch (error) {
-        workerSelect.innerHTML = '<option value="">Error loading workers</option>';
-        showNotification('Error loading workers: ' + error.message, 'error');
-      }
-    }
-
-    // Fungsi untuk auto-discover configuration
-    async function autoDiscoverConfig() {
-      const accountIndex = document.getElementById('wildcardAccountSelect').value;
-      const subdomain = document.getElementById('fullSubdomain').value;
-
-      if (!accountIndex) {
-        showNotification('Please select an account first', 'error');
-        return;
-      }
-
-      const user = users[accountIndex];
-
-      if (!user.accountId) {
-        showNotification('Selected account has no Account ID', 'error');
-        return;
-      }
-
-      showNotification('Auto-discovering configuration...');
-
-      try {
-        const response = await fetch('/api/autoDiscoverConfig', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: user.accountId,
-            targetDomain: subdomain
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          currentWildcardConfig = {
-            accountId: result.accountId,
-            zoneId: result.zone ? result.zone.id : null,
-            serviceName: result.service ? result.service.id : null,
-            rootDomain: result.zone ? result.zone.name : null,
-            appDomain: result.zone ? result.zone.name : null
-          };
-
-          // Update UI dengan informasi yang terdeteksi
-          document.getElementById('detectedAccountId').textContent = result.accountId || '-';
-          document.getElementById('detectedZoneId').textContent = (result.zone && result.zone.id) || '-';
-          document.getElementById('detectedServiceName').textContent = (result.service && result.service.id) || '-';
-          document.getElementById('detectedRootDomain').textContent = (result.zone && result.zone.name) || '-';
-          document.getElementById('autoDetectedInfo').style.display = 'block';
-
-          showNotification('Configuration auto-discovered successfully!');
-
-          // Jika ada domain yang dimasukkan, beri saran
-          if (subdomain && result.zone) {
-            const domainParts = subdomain.split('.');
-            const suggestedDomain = '*.' + result.zone.name;
-            if (!subdomain.includes('*') && domainParts.slice(-2).join('.') === result.zone.name) {
-              document.getElementById('fullSubdomain').placeholder = 'Contoh: ' + suggestedDomain;
-            }
-          }
-        } else {
-          showNotification('Auto-discovery failed: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error during auto-discovery: ' + error.message, 'error');
-      }
-    }
-
-    // Fungsi untuk mendaftarkan wildcard domain
-    async function registerWildcard() {
-      const accountIndex = document.getElementById('wildcardAccountSelect').value;
-      const workerName = document.getElementById('wildcardWorkerSelect').value;
-      let fullSubdomain = document.getElementById('fullSubdomain').value.trim();
-
-      if (!accountIndex || !workerName || !fullSubdomain) {
-        showNotification('Please select account, worker, and enter domain', 'error');
-        return;
-      }
-
-      // Auto-append root domain if not already present
-      if (currentWildcardConfig && currentWildcardConfig.rootDomain) {
-        const root = currentWildcardConfig.rootDomain;
-        if (!fullSubdomain.endsWith(root)) {
-          if (fullSubdomain.endsWith('.')) {
-            fullSubdomain += root;
-          } else {
-            fullSubdomain += '.' + root;
-          }
-        }
-      }
-
-      const user = users[accountIndex];
-
-      if (!user.accountId) {
-        showNotification('Selected account has no Account ID', 'error');
-        return;
-      }
-
-      showNotification('Registering domain: ' + fullSubdomain + '...');
-
-      try {
-        const response = await fetch('/api/registerWildcard', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: user.accountId,
-            zoneId: currentWildcardConfig ? currentWildcardConfig.zoneId : null,
-            serviceName: workerName, // Gunakan worker yang dipilih dari dropdown
-            subdomain: fullSubdomain
-          })
-        });
-
-        const result = await response.json();
-
-        const resultDiv = document.getElementById('wildcardResult');
-        resultDiv.style.display = 'block';
-
-        if (result.success) {
-          resultDiv.innerHTML = '<div class="simple-notification">' + result.message + '</div>';
-          showNotification('Domain registered successfully!');
-
-          // Clear form
-          document.getElementById('fullSubdomain').value = '';
-
-          // Refresh config
-          autoDiscoverConfig();
-        } else {
-          resultDiv.innerHTML = '<div class="notification error">' + result.message + '</div>';
-          showNotification('Failed to register domain: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error: ' + error.message, 'error');
-      }
-    }
-
-    // Fungsi untuk menampilkan daftar domain
-    async function listWildcardDomains() {
-      const accountIndex = document.getElementById('wildcardAccountSelect').value;
-      const workerName = document.getElementById('wildcardWorkerSelect').value;
-
-      if (!accountIndex || !workerName) {
-        showNotification('Please select an account and a worker first', 'error');
-        return;
-      }
-
-      const user = users[accountIndex];
-
-      if (!user.accountId) {
-        showNotification('Selected account has no Account ID', 'error');
-        return;
-      }
-
-      showNotification('Loading registered domains...');
-
-      try {
-        const response = await fetch('/api/listWildcard', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: user.accountId,
-            zoneId: currentWildcardConfig ? currentWildcardConfig.zoneId : null,
-            serviceName: workerName // Gunakan worker yang dipilih dari dropdown
-          })
-        });
-
-        const result = await response.json();
-
-        const domainsList = document.getElementById('domainsList');
-        const wildcardList = document.getElementById('wildcardList');
-
-        if (result.success) {
-          if (result.domains && result.domains.length > 0) {
-            domainsList.innerHTML = result.domains.map(function(domain) {
-              return '<div class="wildcard-domain-item">' +
-                '<span>' + domain + '</span>' +
-                '<div class="wildcard-domain-actions">' +
-                '<button class="btn btn-small copy-btn" onclick="copyToClipboard(\\'' + domain + '\\')">📋</button>' +
-                '<button class="btn btn-small" onclick="window.open(\\'https://' + domain + '\\', \\'_blank\\')">🌍</button>' +
-                '</div>' +
-                '</div>';
-            }).join('');
-          } else {
-            domainsList.innerHTML = '<p>No domains registered for this worker</p>';
-          }
-
-          // Update current config dengan yang dari server
-          if (result.config) {
-            currentWildcardConfig = Object.assign({}, currentWildcardConfig, result.config);
-            updateDetectedInfo();
-          }
-        } else {
-          domainsList.innerHTML = '<p style="color: #ff6b6b;">Error: ' + result.message + '</p>';
-        }
-
-        wildcardList.style.display = 'block';
-        showNotification('Domains loaded successfully');
-      } catch (error) {
-        showNotification('Error loading domains: ' + error.message, 'error');
-      }
-    }
-
-    // Fungsi untuk update info yang terdeteksi
-    function updateDetectedInfo() {
-      if (currentWildcardConfig) {
-        document.getElementById('detectedAccountId').textContent = currentWildcardConfig.accountId || '-';
-        document.getElementById('detectedZoneId').textContent = currentWildcardConfig.zoneId || '-';
-        document.getElementById('detectedServiceName').textContent = currentWildcardConfig.serviceName || '-';
-        document.getElementById('detectedRootDomain').textContent = currentWildcardConfig.rootDomain || '-';
-        document.getElementById('autoDetectedInfo').style.display = 'block';
-
-        if (currentWildcardConfig.rootDomain) {
-          document.getElementById('domainHelpText').innerHTML = 'Masukkan subdomain. Domain <strong>.' + currentWildcardConfig.rootDomain + '</strong> akan ditambahkan otomatis.';
-        }
-      }
-    }
-
-    // Fungsi-fungsi utama
-    async function login() {
-      const email = document.getElementById('email').value;
-      const apiKey = document.getElementById('apiKey').value;
-
-      if (!email || !apiKey) {
-        showNotification('Email and API key are required', 'error');
-        return;
-      }
-
-      showNotification('Logging in...');
-
-      try {
-        const response = await fetch('/api/userInfo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email, globalAPIKey: apiKey })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          const accountsResponse = await fetch('/api/accounts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: email, globalAPIKey: apiKey })
-          });
-
-          const accountsResult = await accountsResponse.json();
-
-          if (accountsResult.success) {
-            const user = {
-              email: email,
-              apiKey: apiKey,
-              userInfo: result.result,
-              accounts: accountsResult.result,
-              accountId: accountsResult.result[0] ? accountsResult.result[0].id : null,
-              id: Date.now().toString()
-            };
-
-            const existingUserIndex = users.findIndex(function(u) { return u.email === email; });
-            if (existingUserIndex >= 0) {
-              users[existingUserIndex] = user;
-              currentUserIndex = existingUserIndex;
-            } else {
-              users.push(user);
-              currentUserIndex = users.length - 1;
-            }
-
-            localStorage.setItem('cf_users', JSON.stringify(users));
-            localStorage.setItem('cf_current_user', currentUserIndex.toString());
-
-            updateUI();
-            fetchAllWorkers();
-            showNotification('Login successful!');
-
-            document.getElementById('email').value = '';
-            document.getElementById('apiKey').value = '';
-          } else {
-            throw new Error(accountsResult.errors && accountsResult.errors[0] ? accountsResult.errors[0].message : 'Failed to fetch accounts');
-          }
-        } else {
-          throw new Error(result.errors && result.errors[0] ? result.errors[0].message : 'Invalid credentials');
-        }
-      } catch (error) {
-        showNotification('Login failed: ' + error.message, 'error');
-      }
-    }
-
-    function logoutCurrent() {
-      if (users.length > 0) {
-        users.splice(currentUserIndex, 1);
-        if (users.length > 0) {
-          currentUserIndex = 0;
-          localStorage.setItem('cf_users', JSON.stringify(users));
-          localStorage.setItem('cf_current_user', currentUserIndex.toString());
-        } else {
-          localStorage.removeItem('cf_users');
-          localStorage.removeItem('cf_current_user');
-          currentUserIndex = 0;
-        }
-        updateUI();
-        showNotification('Logged out successfully');
-      }
-    }
-
-    function logoutAll() {
-      users = [];
-      localStorage.removeItem('cf_users');
-      localStorage.removeItem('cf_current_user');
-      currentUserIndex = 0;
-      updateUI();
-      showNotification('All accounts logged out');
-    }
-
-    function updateUI() {
-      const hasUsers = users.length > 0;
-
-      // Update account status
-      document.getElementById('statusText').textContent = hasUsers ? 'Logged In' : 'Not Logged In';
-      document.getElementById('loginForm').style.display = hasUsers ? 'none' : 'block';
-      document.getElementById('accountInfo').style.display = hasUsers ? 'block' : 'none';
-      document.getElementById('workersSection').style.display = hasUsers ? 'block' : 'none';
-      document.getElementById('accountsPanel').style.display = hasUsers ? 'block' : 'none';
-
-      // Update buttons visibility
-      document.getElementById('createWorkerBtn').style.display = hasUsers ? 'inline-block' : 'none';
-      document.getElementById('bulkCreateBtn').style.display = hasUsers ? 'inline-block' : 'none';
-      document.getElementById('wildcardBtn').style.display = hasUsers ? 'inline-block' : 'none';
-      document.getElementById('exportConfigBtn').style.display = hasUsers ? 'inline-block' : 'none';
-      document.getElementById('bulkActionsDropdown').style.display = hasUsers ? 'inline-block' : 'none';
-
-      if (hasUsers) {
-        const currentUser = users[currentUserIndex];
-        document.getElementById('userEmail').textContent = currentUser.email;
-
-        // Update accounts dropdown
-        const accountSelect = document.getElementById('accountSelect');
-        accountSelect.innerHTML = '';
-        if (currentUser.accounts && currentUser.accounts.length > 0) {
-          currentUser.accounts.forEach(function(account) {
-            const option = document.createElement('option');
-            option.value = account.id;
-            option.textContent = account.name + ' (' + account.id + ')';
-            if (account.id === currentUser.accountId) {
-              option.selected = true;
-            }
-            accountSelect.appendChild(option);
-          });
-        }
-
-        // Update current account display
-        document.getElementById('currentAccountEmail').textContent = currentUser.email;
-
-        // Update accounts dropdown list
-        const accountsDropdownList = document.getElementById('accountsDropdownList');
-        accountsDropdownList.innerHTML = '';
-        users.forEach(function(user, index) {
-          const accountItem = document.createElement('div');
-          accountItem.className = 'account-item' + (index === currentUserIndex ? ' active' : '');
-          accountItem.innerHTML = '<span>' + user.email + '</span>' +
-            '<span class="remove" onclick="event.stopPropagation(); logoutUser(' + index + ')">×</span>';
-          accountItem.addEventListener('click', function() { switchUser(index); });
-          accountsDropdownList.appendChild(accountItem);
-        });
-
-        // Update other accounts count
-        const otherAccountsCount = document.getElementById('otherAccountsCount');
-        otherAccountsCount.textContent = (users.length - 1).toString();
-        document.getElementById('otherAccounts').style.display = users.length > 1 ? 'block' : 'none';
-
-        // Update filter dropdown
-        const filterAccount = document.getElementById('filterAccount');
-        filterAccount.innerHTML = '<option value="">All Accounts</option>';
-        users.forEach(function(user) {
-          const option = document.createElement('option');
-          option.value = user.email;
-          option.textContent = user.email;
-          filterAccount.appendChild(option);
-        });
-      }
-    }
-
-    function switchUser(index) {
-      currentUserIndex = index;
-      localStorage.setItem('cf_current_user', currentUserIndex.toString());
-      updateUI();
-      fetchAllWorkers();
-      showNotification('Switched to account: ' + users[index].email);
-    }
-
-    function logoutUser(index) {
-      if (users.length > 1) {
-        users.splice(index, 1);
-        if (currentUserIndex >= index && currentUserIndex > 0) {
-          currentUserIndex--;
-        }
-        localStorage.setItem('cf_users', JSON.stringify(users));
-        localStorage.setItem('cf_current_user', currentUserIndex.toString());
-        updateUI();
-        fetchAllWorkers();
-        showNotification('Account logged out');
+    
+    function toggleSelectAll() {
+      const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+      if (selectAllCheckbox.checked) {
+        workersList.forEach(w => selectedWorkers.add(w.id));
       } else {
-        logoutAll();
+        selectedWorkers.clear();
       }
+      updateSelectionUI();
+      renderWorkerList();
     }
-
-    async function fetchAllWorkers() {
-      if (users.length === 0) return;
-
-      showNotification('Fetching workers...');
-      document.getElementById('workersList').classList.add('loading');
-
-      try {
-        const workerPromises = users.map(function(user) {
-          return fetch('/api/listWorkers', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: user.email,
-              globalAPIKey: user.apiKey,
-              accountId: user.accountId
-            })
-          }).then(function(res) { return res.json(); }).then(function(data) {
-            return {
-              user: user.email,
-              accountId: user.accountId,
-              workers: data.result || []
-            };
-          });
-        });
-
-        const results = await Promise.all(workerPromises);
-        allWorkers = results.flatMap(function(result) {
-          return result.workers.map(function(worker) {
-            return Object.assign({}, worker, {
-              account: result.user,
-              accountId: result.accountId
-            });
-          });
-        });
-
-        displayWorkers();
-        showNotification('Workers loaded successfully');
-      } catch (error) {
-        showNotification('Error fetching workers: ' + error.message, 'error');
-      } finally {
-        document.getElementById('workersList').classList.remove('loading');
-      }
-    }
-
-    function displayWorkers() {
-      const workersList = document.getElementById('workersList');
-
-      if (allWorkers.length === 0) {
-        workersList.innerHTML = '<p>No workers found</p>';
-        return;
-      }
-
-      // Filter workers berdasarkan search dan filter
-      let filteredWorkers = allWorkers;
-
-      if (currentSearchTerm) {
-        filteredWorkers = filteredWorkers.filter(function(worker) {
-          return worker.id.toLowerCase().includes(currentSearchTerm);
-        });
-      }
-
-      if (currentFilterAccount) {
-        filteredWorkers = filteredWorkers.filter(function(worker) {
-          return worker.account === currentFilterAccount;
-        });
-      }
-
-      if (filteredWorkers.length === 0) {
-        workersList.innerHTML = '<p>No workers match your search criteria</p>';
-        return;
-      }
-
-      workersList.innerHTML = filteredWorkers.map(function(worker) {
-        const isSelected = selectedWorkers.has(worker.id);
-        return '<div class="worker-item' + (isSelected ? ' selected' : '') + '" data-worker-id="' + worker.id + '">' +
-          '<div class="worker-info">' +
-          '<input type="checkbox" class="worker-checkbox" ' + (isSelected ? 'checked' : '') +
-          ' onchange="toggleWorkerSelection(\\'' + worker.id + '\\', this.checked)">' +
-          '<div class="worker-name">' + worker.id + '</div>' +
-          '<div class="account-email">Account: ' + worker.account + '</div>' +
-          '<div class="account-email">Created: ' + new Date(worker.created_on).toLocaleDateString() + '</div>' +
-          '</div>' +
-          '<div class="worker-actions">' +
-          '<div class="actions-dropdown">' +
-          '<button class="btn btn-small">Actions ▼</button>' +
-          '<div class="dropdown-content">' +
-          '<a onclick="viewWorkerConfig(\\'' + worker.id + '\\', \\'' + worker.account + '\\')">View Config</a>' +
-          '<a onclick="editWorker(\\'' + worker.id + '\\', \\'' + worker.account + '\\', \\'' + worker.accountId + '\\')">Edit Script</a>' +
-          '<a onclick="showWorkerAnalytics(\\'' + worker.id + '\\', \\'' + worker.account + '\\')">Analytics</a>' +
-          '<a class="delete-action" onclick="deleteWorker(\\'' + worker.id + '\\', \\'' + worker.account + '\\', \\'' + worker.accountId + '\\')">Delete</a>' +
-          '</div>' +
-          '</div>' +
-          '</div>' +
-          '</div>';
-      }).join('');
-
-      // Update selected count
-      updateSelectedCount();
-    }
-
-    function toggleWorkerSelection(workerId, selected) {
-      if (selected) {
+    
+    function toggleWorkerSelection(workerId, checked) {
+      if (checked) {
         selectedWorkers.add(workerId);
       } else {
         selectedWorkers.delete(workerId);
       }
-      displayWorkers();
-      updateBulkActionsBar();
+      updateSelectionUI();
+      renderWorkerList();
     }
-
-    function selectAllWorkers() {
-      const filteredWorkers = getFilteredWorkers();
-      filteredWorkers.forEach(function(worker) {
-        selectedWorkers.add(worker.id);
-      });
-      displayWorkers();
-      updateBulkActionsBar();
-    }
-
-    function deselectAllWorkers() {
+    
+    function clearSelection() {
       selectedWorkers.clear();
-      displayWorkers();
-      updateBulkActionsBar();
+      updateSelectionUI();
+      renderWorkerList();
     }
-
-    function getFilteredWorkers() {
-      let filteredWorkers = allWorkers;
-
-      if (currentSearchTerm) {
-        filteredWorkers = filteredWorkers.filter(function(worker) {
-          return worker.id.toLowerCase().includes(currentSearchTerm);
-        });
-      }
-
-      if (currentFilterAccount) {
-        filteredWorkers = filteredWorkers.filter(function(worker) {
-          return worker.account === currentFilterAccount;
-        });
-      }
-
-      return filteredWorkers;
-    }
-
-    function updateSelectedCount() {
-      const selectedCount = document.getElementById('selectedCount');
-      const selectedCountNumber = document.getElementById('selectedCountNumber');
-
-      if (selectedWorkers.size > 0) {
-        selectedCountNumber.textContent = selectedWorkers.size.toString();
-        selectedCount.style.display = 'inline-block';
-      } else {
-        selectedCount.style.display = 'none';
-      }
-    }
-
-    function updateBulkActionsBar() {
-      const bulkActionsBar = document.getElementById('bulkActionsBar');
-      const bulkActionsText = document.getElementById('bulkActionsText');
-
-      if (selectedWorkers.size > 0) {
-        bulkActionsText.textContent = selectedWorkers.size + ' workers selected';
-        bulkActionsBar.classList.add('active');
-      } else {
-        bulkActionsBar.classList.remove('active');
-      }
-    }
-
-    function closeBulkActions() {
-      selectedWorkers.clear();
-      displayWorkers();
-      updateBulkActionsBar();
-    }
-
-    function showBulkActionsModal() {
-      if (selectedWorkers.size === 0) {
-        showNotification('Please select workers first', 'error');
-        return;
-      }
-
-      const modal = document.getElementById('bulkActionsModal');
-      const bulkSelectedCount = document.getElementById('bulkSelectedCount');
-      const bulkSelectedList = document.getElementById('bulkSelectedList');
-
-      bulkSelectedCount.textContent = selectedWorkers.size.toString();
-
-      const selectedWorkerDetails = allWorkers.filter(function(worker) {
-        return selectedWorkers.has(worker.id);
-      });
-      bulkSelectedList.innerHTML = selectedWorkerDetails.map(function(worker) {
-        return '<div style="padding: 5px; border-bottom: 1px solid #444;">' +
-          '<strong>' + worker.id + '</strong> - ' + worker.account +
-          '</div>';
-      }).join('');
-
-      modal.style.display = 'flex';
-    }
-
-    function hideBulkActionsModal() {
-      document.getElementById('bulkActionsModal').style.display = 'none';
-    }
-
+    
     async function bulkDeleteWorkers() {
       if (selectedWorkers.size === 0) {
-        showNotification('No workers selected', 'error');
+        notify("Tidak ada worker yang dipilih!", true);
         return;
       }
-
-      if (!confirm('Are you sure you want to delete ' + selectedWorkers.size + ' workers? This action cannot be undone.')) {
-        return;
-      }
-
-      showNotification('Deleting selected workers...');
-
-      const selectedWorkerDetails = allWorkers.filter(function(worker) {
-        return selectedWorkers.has(worker.id);
-      });
-      const userGroups = {};
-
-      // Group workers by user account
-      selectedWorkerDetails.forEach(function(worker) {
-        if (!userGroups[worker.account]) {
-          userGroups[worker.account] = [];
-        }
-        userGroups[worker.account].push(worker);
-      });
-
+      
+      const workerNames = Array.from(selectedWorkers);
+      if (!confirm(\`Yakin ingin menghapus \${workerNames.length} worker?\\n\\n\${workerNames.join('\\n')}\`)) return;
+      
+      notify(\`Menghapus \${workerNames.length} worker...\`);
+      
       try {
-        const deletePromises = [];
-
-        for (const email in userGroups) {
-          if (userGroups.hasOwnProperty(email)) {
-            const user = users.find(function(u) { return u.email === email; });
-            if (user) {
-              const workerNames = userGroups[email].map(function(w) { return w.id; });
-
-              deletePromises.push(
-                fetch('/api/bulkDeleteWorkers', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    email: user.email,
-                    globalAPIKey: user.apiKey,
-                    accountId: user.accountId,
-                    workerNames: workerNames
-                  })
-                }).then(function(res) { return res.json(); })
-              );
-            }
+        const res = await fetch('/api/delete-bulk', {
+          method: 'POST',
+          headers: {
+            'X-Auth-Email': currentAcc.email,
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ names: workerNames })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+          let message = \`✅ Selesai! \${result.successCount} dari \${result.total} worker berhasil dihapus.\`;
+          if (result.failedCount > 0) {
+            const failed = result.results.filter(r => !r.success).map(r => r.name).join(', ');
+            message += \`\\n❌ Gagal: \${failed}\`;
           }
-        }
-
-        const results = await Promise.all(deletePromises);
-        const allSuccess = results.every(function(r) { return r.success; });
-
-        if (allSuccess) {
-          showNotification('Successfully deleted ' + selectedWorkers.size + ' workers');
+          notify(message, result.failedCount > 0);
           selectedWorkers.clear();
-          fetchAllWorkers();
-          hideBulkActionsModal();
+          fetchList();
         } else {
-          showNotification('Some workers failed to delete', 'error');
+          throw new Error(result.error || "Gagal menghapus worker");
         }
-      } catch (error) {
-        showNotification('Error deleting workers: ' + error.message, 'error');
+      } catch(e) {
+        notify("❌ Gagal: " + e.message, true);
       }
     }
-
-    function showCreateWorkerModal() {
-      const modal = document.getElementById('createWorkerModal');
-      const accountSelect = document.getElementById('createAccountSelect');
-
-      accountSelect.innerHTML = '';
-      users.forEach(function(user, index) {
-        const option = document.createElement('option');
-        option.value = index;
-        option.textContent = user.email + ' (' + (user.accountId || 'No account selected') + ')';
-        accountSelect.appendChild(option);
-      });
-
-      modal.style.display = 'flex';
-    }
-
-    function hideCreateWorkerModal() {
-      document.getElementById('createWorkerModal').style.display = 'none';
-    }
-
-    async function createWorker() {
-      const accountIndex = document.getElementById('createAccountSelect').value;
-      const workerName = document.getElementById('workerName').value;
-      const template = document.getElementById('workerTemplate').value;
-      const scriptUrl = document.getElementById('scriptUrl').value;
-
-      if (!accountIndex || !workerName) {
-        showNotification('Please select account and enter worker name', 'error');
+    
+    function renderWorkerList() {
+      if (workersList.length === 0) {
+        $('workerListContainer').innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-inbox fa-2x mb-2 d-block"></i>Belum ada worker</div>';
         return;
       }
-
-      const user = users[accountIndex];
-
-      showNotification('Creating worker...');
-
+      
+      $('workerListContainer').innerHTML = workersList.map(w => {
+        const workerUrl = w.url || \`https://\${w.id}.workers.dev\`;
+        return \`
+          <div class="worker-item p-3 mb-2">
+            <div class="d-flex align-items-start">
+              <input type="checkbox" class="worker-checkbox me-3 mt-1" 
+                     data-worker-id="\${w.id}"
+                     \${selectedWorkers.has(w.id) ? 'checked' : ''}
+                     onchange="toggleWorkerSelection('\${w.id}', this.checked)">
+              <div class="flex-grow-1">
+                <div class="fw-bold">
+                  <i class="fas fa-code text-info me-2"></i>\${w.id}
+                </div>
+                <div class="worker-url mt-1">
+                  <i class="fas fa-link me-1" style="font-size: 10px;"></i>
+                  <span id="url-\${w.id}">\${workerUrl}</span>
+                  <i class="fas fa-copy ms-2 copy-url-btn text-info" style="font-size: 12px; cursor: pointer;" 
+                     onclick="event.stopPropagation(); copyToClipboard('\${workerUrl}', '✅ URL \${w.id} berhasil dicopy!')"></i>
+                </div>
+                <div class="small text-muted mt-1">
+                  <i class="fas fa-envelope me-1"></i>\${currentAcc.email}
+                </div>
+              </div>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-info rounded-circle" style="width: 32px; height: 32px;" type="button" data-bs-toggle="dropdown">
+                  <i class="fas fa-ellipsis-v"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-dark">
+                  <li><a class="dropdown-item" href="#" onclick="viewConfig('\${w.id}')">
+                    <i class="fas fa-eye me-2"></i> View Config
+                  </a></li>
+                  <li><hr class="dropdown-divider"></li>
+                  <li><a class="dropdown-item text-danger" href="#" onclick="deleteSingleWorker('\${w.id}')">
+                    <i class="fas fa-trash me-2"></i> Delete
+                  </a></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        \`;
+      }).join('');
+    }
+    
+    async function deleteSingleWorker(workerName) {
+      if (!confirm(\`Yakin ingin menghapus worker "\${workerName}"?\`)) return;
+      
+      notify(\`Menghapus \${workerName}...\`);
       try {
-        const response = await fetch('/api/createWorker', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            workerName: workerName,
-            workerScriptUrl: scriptUrl,
-            accountId: user.accountId,
-            template: template
-          })
+        const res = await fetch('/api/delete', {
+          method: 'DELETE',
+          headers: {
+            'X-Auth-Email': currentAcc.email,
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name: workerName })
         });
-
-        const result = await response.json();
-
-        const resultDiv = document.getElementById('createResult');
-        resultDiv.style.display = 'block';
-
-        if (result.success) {
-          let resultHTML = '<div class="simple-notification">' + result.message;
-          if (result.proxyIP) {
-            resultHTML += '<br><strong>Proxy IP:</strong> ' + result.proxyIP;
+        const d = await res.json();
+        if (d.success) {
+          notify(\`✅ Worker "\${workerName}" berhasil dihapus!\`);
+          selectedWorkers.delete(workerName);
+          fetchList();
+          $('customDomainSelect').innerHTML = '<option value="">Pilih Worker</option>';
+          $('domainList').innerHTML = '';
+          $('updateWorkerSelect').innerHTML = '<option value="">Pilih Worker...</option>';
+          if (currentLoadedWorkerName === workerName) {
+            enableCopyDownloadButtons(false);
+            currentLoadedWorkerName = null;
           }
-          resultHTML += '</div>';
+        } else {
+          notify("❌ Gagal hapus: " + (d.errors?.[0]?.message || "Unknown error"), true);
+        }
+      } catch(e) {
+        notify("❌ Error: " + e.message, true);
+      }
+    }
 
-          if (result.url) {
-            resultHTML += '<div class="config-display">' +
-              '<div class="config-type">Worker URL:</div>' +
-              '<div>' + result.url + '</div>';
-
-            if (result.vless) {
-              resultHTML += '<div class="config-type">VLESS Config:</div>' +
-                '<div>' + result.vless + '</div>';
-            }
-
-            if (result.trojan) {
-              resultHTML += '<div class="config-type">Trojan Config:</div>' +
-                '<div>' + result.trojan + '</div>';
-            }
-
-            resultHTML += '</div>';
+    async function viewConfig(workerName) {
+      if (!currentAcc) {
+        notify("Pilih akun terlebih dahulu!", true);
+        return;
+      }
+      
+      notify(\`Mengambil konfigurasi \${workerName}...\`);
+      
+      try {
+        const res = await fetch('/api/get?name=' + encodeURIComponent(workerName), {
+          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        });
+        const d = await res.json();
+        
+        if (d.success) {
+          const code = d.code;
+          const codeLength = code.length;
+          const lines = code.split('\\n').length;
+          const workerUrl = d.url || \`https://\${workerName}.workers.dev\`;
+          
+          let workerType = 'Standard Worker';
+          let features = [];
+          
+          if (code.includes('export default') && code.includes('fetch')) {
+            workerType = 'ES Modules Worker';
+            features.push('ES Modules');
           }
-
-          resultDiv.innerHTML = resultHTML;
-          showNotification('Worker created successfully!');
-
-          // Clear form
-          document.getElementById('workerName').value = '';
-          document.getElementById('scriptUrl').value = 'https://r2.lifetime69.workers.dev/raw/ffdr6xgncp7mkfcd6mj';
-
-          // Refresh workers list
-          setTimeout(function() { fetchAllWorkers(); }, 2000);
-        } else {
-          resultDiv.innerHTML = '<div class="notification error">' + result.message + '</div>';
-          showNotification('Failed to create worker: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error: ' + error.message, 'error');
-      }
-    }
-
-    function showBulkCreateModal() {
-      const modal = document.getElementById('bulkCreateModal');
-      const accountsSelect = document.getElementById('bulkAccountsSelect');
-
-      accountsSelect.innerHTML = '';
-      users.forEach(function(user, index) {
-        const option = document.createElement('option');
-        option.value = index;
-        option.textContent = user.email + ' (' + (user.accountId || 'No account selected') + ')';
-        option.selected = true;
-        accountsSelect.appendChild(option);
-      });
-
-      modal.style.display = 'flex';
-    }
-
-    function hideBulkCreateModal() {
-      document.getElementById('bulkCreateModal').style.display = 'none';
-    }
-
-    async function bulkCreateWorkers() {
-      const selectedAccounts = Array.from(document.getElementById('bulkAccountsSelect').selectedOptions);
-      const workerName = document.getElementById('bulkWorkerName').value;
-      const template = document.getElementById('bulkWorkerTemplate').value;
-      const scriptUrl = document.getElementById('bulkScriptUrl').value;
-
-      if (selectedAccounts.length === 0 || !workerName) {
-        showNotification('Please select accounts and enter worker name', 'error');
-        return;
-      }
-
-      const accounts = selectedAccounts.map(function(option) {
-        const user = users[option.value];
-        return {
-          email: user.email,
-          apiKey: user.apiKey,
-          accountId: user.accountId
-        };
-      });
-
-      showNotification('Starting bulk create...');
-
-      const progressBar = document.getElementById('bulkProgress');
-      const resultsDiv = document.getElementById('bulkResults');
-      resultsDiv.innerHTML = '';
-      resultsDiv.style.display = 'block';
-
-      try {
-        const response = await fetch('/api/bulkCreateWorkers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accounts: accounts,
-            workerName: workerName,
-            workerScriptUrl: scriptUrl,
-            template: template
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          const successCount = result.results.filter(function(r) { return r.success; }).length;
-          resultsDiv.innerHTML = '<div class="simple-notification">' +
-            'Successfully created workers on ' + successCount + ' out of ' + result.results.length + ' accounts' +
-            '</div>' +
-            '<div style="max-height: 300px; overflow-y: auto; margin-top: 15px;">' +
-            result.results.map(function(r) {
-              return '<div style="padding: 10px; margin: 5px 0; background: ' + (r.success ? '#1a3a5f' : '#5a2a2a') + '; border-radius: 5px;">' +
-                '<strong>' + r.email + '</strong>: ' + (r.success ? '✅ Success' : '❌ Failed') +
-                (r.message ? '<br><small>' + r.message + '</small>' : '') +
-                (r.proxyIP ? '<br><small>Proxy IP: ' + r.proxyIP + '</small>' : '') +
-                '</div>';
-            }).join('') +
-            '</div>';
-          showNotification('Bulk create completed!');
-
-          // Refresh workers list
-          setTimeout(function() { fetchAllWorkers(); }, 3000);
-        } else {
-          resultsDiv.innerHTML = '<div class="notification error">' + result.message + '</div>';
-          showNotification('Bulk create failed: ' + result.message, 'error');
-        }
-      } catch (error) {
-        resultsDiv.innerHTML = '<div class="notification error">Error: ' + error.message + '</div>';
-        showNotification('Error during bulk create: ' + error.message, 'error');
-      }
-    }
-
-    async function editWorker(workerName, accountEmail, accountId) {
-      const user = users.find(function(u) { return u.email === accountEmail; });
-      if (!user) {
-        showNotification('User not found', 'error');
-        return;
-      }
-
-      showNotification('Loading worker script...');
-
-      try {
-        const response = await fetch('/api/getWorkerScript', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: accountId,
-            workerName: workerName
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          currentEditingWorker = { workerName: workerName, accountEmail: accountEmail, accountId: accountId };
-
-          document.getElementById('editWorkerName').value = workerName;
-          document.getElementById('editWorkerAccount').value = accountEmail;
-          document.getElementById('editWorkerScript').value = result.scriptContent;
-
-          document.getElementById('editWorkerModal').style.display = 'flex';
-          showNotification('Worker script loaded');
-        } else {
-          showNotification('Failed to load worker script: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error loading worker script: ' + error.message, 'error');
-      }
-    }
-
-    function hideEditWorkerModal() {
-      document.getElementById('editWorkerModal').style.display = 'none';
-      currentEditingWorker = null;
-    }
-
-    async function reloadWorkerScript() {
-      if (!currentEditingWorker) return;
-
-      const workerName = currentEditingWorker.workerName;
-      const accountEmail = currentEditingWorker.accountEmail;
-      const accountId = currentEditingWorker.accountId;
-      const user = users.find(function(u) { return u.email === accountEmail; });
-
-      if (!user) {
-        showNotification('User not found', 'error');
-        return;
-      }
-
-      showNotification('Reloading worker script...');
-
-      try {
-        const response = await fetch('/api/getWorkerScript', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: accountId,
-            workerName: workerName
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          document.getElementById('editWorkerScript').value = result.scriptContent;
-          showNotification('Worker script reloaded');
-        } else {
-          showNotification('Failed to reload worker script: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error reloading worker script: ' + error.message, 'error');
-      }
-    }
-
-    async function updateWorker() {
-      if (!currentEditingWorker) return;
-
-      const workerName = currentEditingWorker.workerName;
-      const accountEmail = currentEditingWorker.accountEmail;
-      const accountId = currentEditingWorker.accountId;
-      const user = users.find(function(u) { return u.email === accountEmail; });
-      const scriptContent = document.getElementById('editWorkerScript').value;
-
-      if (!user || !scriptContent) {
-        showNotification('Invalid data', 'error');
-        return;
-      }
-
-      showNotification('Updating worker...');
-
-      try {
-        const response = await fetch('/api/updateWorker', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: accountId,
-            workerName: workerName,
-            scriptContent: scriptContent
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          showNotification('Worker updated successfully!');
-          hideEditWorkerModal();
-          fetchAllWorkers();
-        } else {
-          showNotification('Failed to update worker: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error updating worker: ' + error.message, 'error');
-      }
-    }
-
-    async function deleteWorker(workerName, accountEmail, accountId) {
-      if (!confirm('Are you sure you want to delete worker "' + workerName + '"? This action cannot be undone.')) {
-        return;
-      }
-
-      const user = users.find(function(u) { return u.email === accountEmail; });
-      if (!user) {
-        showNotification('User not found', 'error');
-        return;
-      }
-
-      showNotification('Deleting worker...');
-
-      try {
-        const response = await fetch('/api/deleteWorker', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: user.email,
-            globalAPIKey: user.apiKey,
-            accountId: accountId,
-            workerName: workerName
-          })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          showNotification('Worker deleted successfully!');
-          fetchAllWorkers();
-        } else {
-          showNotification('Failed to delete worker: ' + result.message, 'error');
-        }
-      } catch (error) {
-        showNotification('Error deleting worker: ' + error.message, 'error');
-      }
-    }
-
-    async function viewWorkerConfig(workerName, accountEmail) {
-      // This would typically fetch the actual worker config
-      // For now, we'll show a placeholder
-      document.getElementById('configWorkerName').value = workerName;
-      document.getElementById('configWorkerAccount').value = accountEmail;
-      document.getElementById('configResultsContent').innerHTML = '<div class="config-display">' +
-        '<div class="config-type">Worker Information:</div>' +
-        '<div>Name: ' + workerName + '</div>' +
-        '<div>Account: ' + accountEmail + '</div>' +
-        '<div>Status: Active</div>' +
-        '<div>Created: ' + new Date().toLocaleDateString() + '</div>' +
-        '</div>' +
-        '<div style="margin-top: 15px;">' +
-        '<small>Note: Detailed configuration would be displayed here based on worker type and settings.</small>' +
-        '</div>';
-
-      document.getElementById('configResultsModal').style.display = 'flex';
-    }
-
-    function hideConfigResultsModal() {
-      document.getElementById('configResultsModal').style.display = 'none';
-    }
-
-    function showUserDetail() {
-      const currentUser = users[currentUserIndex];
-      const userDetailContent = document.getElementById('userDetailContent');
-
-      let userDetailHTML = '<div style="max-height: 70vh; overflow-y: auto;">';
-
-      // Basic User Information
-      userDetailHTML += '<h4>👤 Basic Information</h4>' +
-        '<div class="user-info-item">' +
-        '<span class="user-info-label">Email:</span>' +
-        '<span class="user-info-value">' + currentUser.email + '</span>' +
-        '</div>' +
-        '<div class="user-info-item">' +
-        '<span class="user-info-label">API Key:</span>' +
-        '<span class="user-info-value">' +
-        '<span class="api-key-masked">••••••••••••••••••••••</span>' +
-        '<button class="btn copy-btn" onclick="copyToClipboard(\\'' + currentUser.apiKey + '\\')">Copy</button>' +
-        '</span>' +
-        '</div>';
-
-      if (currentUser.userInfo) {
-        const user = currentUser.userInfo;
-
-        userDetailHTML +=
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">User ID:</span>' +
-          '<span class="user-info-value">' + (user.id || 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Username:</span>' +
-          '<span class="user-info-value">' + (user.username || 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Full Name:</span>' +
-          '<span class="user-info-value">' + (user.first_name || '') + ' ' + (user.last_name || '') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Telephone:</span>' +
-          '<span class="user-info-value">' + (user.telephone || 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Country:</span>' +
-          '<span class="user-info-value">' + (user.country || 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Zip Code:</span>' +
-          '<span class="user-info-value">' + (user.zipcode || 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Account Created:</span>' +
-          '<span class="user-info-value">' + (user.created_on ? new Date(user.created_on).toLocaleString() : 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Last Modified:</span>' +
-          '<span class="user-info-value">' + (user.modified_on ? new Date(user.modified_on).toLocaleString() : 'N/A') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">2FA Enabled:</span>' +
-          '<span class="user-info-value">' + (user.two_factor_authentication ? '✅ Yes' : '❌ No') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Account Status:</span>' +
-          '<span class="user-info-value">' + (user.suspended ? '🔴 Suspended' : '🟢 Active') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Total Zones:</span>' +
-          '<span class="user-info-value">' + (user.total_zone_count || '0') + '</span>' +
-          '</div>';
-
-        // Account Types
-        userDetailHTML += '<div class="user-info-item">' +
-          '<span class="user-info-label">Pro Zones:</span>' +
-          '<span class="user-info-value">' + (user.has_pro_zones ? '✅ Yes' : '❌ No') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Business Zones:</span>' +
-          '<span class="user-info-value">' + (user.has_business_zones ? '✅ Yes' : '❌ No') + '</span>' +
-          '</div>' +
-          '<div class="user-info-item">' +
-          '<span class="user-info-label">Enterprise Zones:</span>' +
-          '<span class="user-info-value">' + (user.has_enterprise_zones ? '✅ Yes' : '❌ No') + '</span>' +
-          '</div>';
-      }
-
-      // Cloudflare Accounts
-      if (currentUser.accounts && currentUser.accounts.length > 0) {
-        userDetailHTML += '<h4 style="margin-top: 20px;">🏢 Cloudflare Accounts</h4>';
-
-        currentUser.accounts.forEach(function(account, index) {
-          userDetailHTML +=
-            '<div style="background: #3d3d3d; padding: 15px; border-radius: 8px; margin: 10px 0;">' +
-            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">' +
-            '<strong>' + account.name + '</strong>' +
-            '<span class="account-badge">' + (account.detailed_info && account.detailed_info.type ? account.detailed_info.type : 'Standard') + '</span>' +
-            '</div>' +
-
-            '<div class="user-info-item">' +
-            '<span class="user-info-label">Account ID:</span>' +
-            '<span class="user-info-value">' + account.id + '</span>' +
-            '</div>' +
-
-            '<div class="user-info-item">' +
-            '<span class="user-info-label">Settings:</span>' +
-            '<span class="user-info-value">' +
-            (account.detailed_info && account.detailed_info.settings ?
-              Object.keys(account.detailed_info.settings).map(key =>
-                key + ': ' + (account.detailed_info.settings[key] ? '✅' : '❌')
-              ).join(', ') : 'Default settings') +
-            '</span>' +
-            '</div>';
-
-          if (account.subscription) {
-            userDetailHTML +=
-              '<div class="user-info-item">' +
-              '<span class="user-info-label">Subscription:</span>' +
-              '<span class="user-info-value">' + account.subscription.rate_plan.name + ' (\$' + (account.subscription.rate_plan.price / 100) + '/month)' + '</span>' +
-              '</div>' +
-              '<div class="user-info-item">' +
-              '<span class="user-info-label">Status:</span>' +
-              '<span class="user-info-value">' + account.subscription.state + '</span>' +
-              '</div>';
+          if (code.includes('addEventListener') && code.includes('fetch')) {
+            workerType = 'Service Worker';
+            features.push('Service Worker API');
           }
-
-          userDetailHTML +=
-            '<div class="user-info-item">' +
-            '<span class="user-info-label">Members:</span>' +
-            '<span class="user-info-value">' + account.member_count + ' total' + '</span>' +
-            '</div>';
-
-          // Show first few members
-          if (account.members && account.members.length > 0) {
-            userDetailHTML += '<div style="margin-top: 10px;">' +
-              '<small><strong>Recent Members:</strong></small>' +
-              '<div style="font-size: 12px; margin-top: 5px;">' +
-              account.members.map(member =>
-                '<div style="display: inline-block; background: #2d2d2d; padding: 2px 8px; border-radius: 10px; margin: 2px;">' +
-                member.user_email +
-                '</div>'
-              ).join('') +
-              '</div>' +
-              '</div>';
+          if (code.includes('await fetch') || code.includes('.fetch(')) {
+            features.push('HTTP Requests');
           }
-
-          userDetailHTML += '</div>';
+          if (code.includes('caches') || code.includes('CacheStorage')) {
+            features.push('Cache API');
+          }
+          if (code.includes('KVNamespace') || (code.includes('.get(') && code.includes('.put('))) {
+            features.push('KV Storage');
+          }
+          if (code.includes('HTMLRewriter')) {
+            features.push('HTML Rewriter');
+          }
+          if (code.includes('WebSocket')) {
+            features.push('WebSocket');
+          }
+          
+          const modalHtml = \`
+            <div class="modal fade" id="configModal" tabindex="-1" style="z-index: 1060;">
+              <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-content config-modal text-white">
+                  <div class="modal-header border-secondary">
+                    <h5 class="modal-title">
+                      <i class="fas fa-cog text-primary"></i> Worker Configuration
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div class="mb-4">
+                      <h6 class="text-info mb-3"><i class="fas fa-info-circle"></i> Worker Information</h6>
+                      <div class="row">
+                        <div class="col-md-6 mb-2">
+                          <div class="text-muted small">Worker Name</div>
+                          <div><code>\${workerName}</code></div>
+                        </div>
+                        <div class="col-md-6 mb-2">
+                          <div class="text-muted small">Account</div>
+                          <div>\${currentAcc.email}</div>
+                        </div>
+                        <div class="col-md-6 mb-2">
+                          <div class="text-muted small">Worker URL</div>
+                          <div>
+                            <code class="text-success">\${workerUrl}</code>
+                            <i class="fas fa-copy ms-2 copy-url-btn" style="cursor: pointer;" 
+                               onclick="copyToClipboard('\${workerUrl}', '✅ Worker URL berhasil dicopy!')"></i>
+                          </div>
+                        </div>
+                        <div class="col-md-6 mb-2">
+                          <div class="text-muted small">Status</div>
+                          <div><span class="badge bg-success">Active</span></div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                      <h6 class="text-info mb-3"><i class="fas fa-code"></i> Code Statistics</h6>
+                      <div class="row">
+                        <div class="col-md-4 mb-2">
+                          <div class="text-muted small">File Size</div>
+                          <div>\${(codeLength / 1024).toFixed(2)} KB</div>
+                        </div>
+                        <div class="col-md-4 mb-2">
+                          <div class="text-muted small">Lines of Code</div>
+                          <div>\${lines}</div>
+                        </div>
+                        <div class="col-md-4 mb-2">
+                          <div class="text-muted small">Worker Type</div>
+                          <div><span class="badge bg-info">\${workerType}</span></div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                      <h6 class="text-info mb-3"><i class="fas fa-puzzle-piece"></i> Features Detected</h6>
+                      <div>
+                        \${features.length > 0 ? features.map(f => \`<span class="badge bg-secondary me-2 mb-2">\${f}</span>\`).join('') : '<span class="text-muted">No specific features detected</span>'}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h6 class="text-info mb-3"><i class="fas fa-link"></i> Custom Domains</h6>
+                      <div id="configDomainsList" class="small">
+                        <span class="text-muted">Loading domains...</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          \`;
+          
+          const existingModal = document.getElementById('configModal');
+          if (existingModal) existingModal.remove();
+          
+          document.body.insertAdjacentHTML('beforeend', modalHtml);
+          
+          loadDomainsForConfig(workerName);
+          
+          const modal = new bootstrap.Modal(document.getElementById('configModal'));
+          modal.show();
+          
+          document.getElementById('configModal').addEventListener('hidden.bs.modal', function() {
+            this.remove();
+          });
+        } else {
+          throw new Error(d.errors?.[0]?.message || "Gagal ambil konfigurasi");
+        }
+      } catch(e) {
+        notify("❌ Gagal: " + e.message, true);
+      }
+    }
+    
+    async function loadDomainsForConfig(workerName) {
+      try {
+        const res = await fetch('/api/get-custom-domains?name=' + encodeURIComponent(workerName), {
+          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
         });
+        const data = await res.json();
+        const container = document.getElementById('configDomainsList');
+        if (container) {
+          if (data.success && data.customDomains && data.customDomains.length > 0) {
+            container.innerHTML = data.customDomains.map(d => 
+              \`<div class="mb-1"><i class="fas fa-globe text-success me-2"></i>\${d.hostname}</div>\`
+            ).join('');
+          } else {
+            container.innerHTML = '<span class="text-muted">No custom domains attached</span>';
+          }
+        }
+      } catch(e) {
+        const container = document.getElementById('configDomainsList');
+        if (container) {
+          container.innerHTML = '<span class="text-muted">Failed to load domains</span>';
+        }
       }
+    }
 
-      // Organizations
-      if (currentUser.userInfo && currentUser.userInfo.organizations && currentUser.userInfo.organizations.length > 0) {
-        userDetailHTML += '<h4 style="margin-top: 20px;">🏛️ Organizations</h4>';
-
-        currentUser.userInfo.organizations.forEach(function(org) {
-          userDetailHTML +=
-            '<div style="background: #3d3d3d; padding: 10px; border-radius: 5px; margin: 5px 0;">' +
-            '<strong>' + org.name + '</strong>' +
-            '<div style="font-size: 12px; color: #ccc;">Role: ' + org.role + ' | Status: ' + org.status + '</div>' +
-            '</div>';
-        });
+    async function copyCodeToClipboard() {
+      const code = $('editor').value;
+      if (!code) {
+        notify("Tidak ada kode untuk dicopy!", true);
+        return;
       }
-
-      // Beta Features
-      if (currentUser.userInfo && currentUser.userInfo.betas && currentUser.userInfo.betas.length > 0) {
-        userDetailHTML += '<h4 style="margin-top: 20px;">🔬 Beta Features</h4>' +
-          '<div style="display: flex; flex-wrap: wrap; gap: 5px;">' +
-          currentUser.userInfo.betas.map(beta =>
-            '<span style="background: #007bff; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">' + beta + '</span>'
-          ).join('') +
-          '</div>';
+      
+      try {
+        await navigator.clipboard.writeText(code);
+        notify("✅ Kode berhasil dicopy ke clipboard!");
+      } catch (err) {
+        const textarea = document.createElement('textarea');
+        textarea.value = code;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        notify("✅ Kode berhasil dicopy ke clipboard!");
       }
-
-      userDetailHTML += '</div>'; // Close scroll container
-
-      userDetailContent.innerHTML = userDetailHTML;
-      document.getElementById('userDetailModal').style.display = 'flex';
     }
-
-    function hideUserDetailModal() {
-      document.getElementById('userDetailModal').style.display = 'none';
-    }
-
-    function showAnalyticsModal() {
-      // For demo purposes, we'll show random analytics data
-      document.getElementById('totalRequests').textContent = (Math.floor(Math.random() * 10000) + 1000).toLocaleString();
-      document.getElementById('successRate').textContent = (Math.floor(Math.random() * 20) + 80) + '%';
-      document.getElementById('avgResponseTime').textContent = (Math.floor(Math.random() * 100) + 50) + 'ms';
-      document.getElementById('cpuTime').textContent = (Math.floor(Math.random() * 100000) + 50000).toLocaleString() + 'ms';
-
-      document.getElementById('p95Response').textContent = (Math.floor(Math.random() * 200) + 100) + 'ms';
-      document.getElementById('p99Response').textContent = (Math.floor(Math.random() * 300) + 150) + 'ms';
-      document.getElementById('cacheHitRate').textContent = (Math.floor(Math.random() * 40) + 60) + '%';
-
-      document.getElementById('analyticsModal').style.display = 'flex';
-    }
-
-    function hideAnalyticsModal() {
-      document.getElementById('analyticsModal').style.display = 'none';
-    }
-
-    function showExportConfig() {
-      const configData = {
-        users: users.map(function(user) {
-          return {
-            email: user.email,
-            accountId: user.accountId,
-            // Don't export API keys for security
-          };
-        }),
-                workers: allWorkers.map(function(worker) {
-          return {
-            id: worker.id,
-            account: worker.account,
-            created_on: worker.created_on
-          };
-        }),
-        export_date: new Date().toISOString(),
-        version: '1.0'
-      };
-
-      document.getElementById('exportData').value = JSON.stringify(configData, null, 2);
-      document.getElementById('configModal').style.display = 'flex';
-    }
-
-    function hideConfigModal() {
-      document.getElementById('configModal').style.display = 'none';
-    }
-
-    function copyExportData() {
-      const exportData = document.getElementById('exportData');
-      exportData.select();
-      document.execCommand('copy');
-      showNotification('Configuration copied to clipboard!');
-    }
-
-    function downloadExportData() {
-      const exportData = document.getElementById('exportData').value;
-      const blob = new Blob([exportData], { type: 'application/json' });
+    
+    function downloadCode() {
+      const code = $('editor').value;
+      if (!code) {
+        notify("Tidak ada kode untuk didownload!", true);
+        return;
+      }
+      
+      const workerName = currentLoadedWorkerName || $('updateWorkerSelect').value || $('newWorkerName').value || 'worker';
+      const filename = \`\${workerName}.js\`;
+      const blob = new Blob([code], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'cloudflare-workers-config-' + new Date().toISOString().split('T')[0] + '.json';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showNotification('Configuration downloaded!');
+      notify(\`✅ Kode berhasil didownload sebagai \${filename}\`);
     }
 
-    function importConfig() {
-      const importData = document.getElementById('importData').value;
-
-      if (!importData) {
-        showNotification('Please paste configuration data or upload a file', 'error');
+    function selectEditorMode(mode) {
+      currentEditorMode = mode;
+      
+      $('panelImportUrl').style.display = 'none';
+      $('panelImportFile').style.display = 'none';
+      $('panelManual').style.display = 'none';
+      $('panelUpdate').style.display = 'none';
+      
+      const modes = ['url', 'file', 'manual', 'update'];
+      modes.forEach(m => {
+        const el = $('mode' + m.charAt(0).toUpperCase() + m.slice(1));
+        if (el) el.classList.remove('selected');
+      });
+      
+      $('editorPanel').style.display = 'block';
+      
+      if (mode === 'url') {
+        $('panelImportUrl').style.display = 'block';
+        $('modeImportUrl').classList.add('selected');
+      } else if (mode === 'file') {
+        $('panelImportFile').style.display = 'block';
+        $('modeImportFile').classList.add('selected');
+      } else if (mode === 'manual') {
+        $('panelManual').style.display = 'block';
+        $('modeManual').classList.add('selected');
+      } else if (mode === 'update') {
+        $('panelUpdate').style.display = 'block';
+        $('modeUpdate').classList.add('selected');
+        updateUpdateWorkerSelect();
+      }
+    }
+    
+    function updateUpdateWorkerSelect() {
+      const select = $('updateWorkerSelect');
+      if (workersList.length > 0) {
+        select.innerHTML = '<option value="">Pilih Worker...</option>' + 
+          workersList.map(w => \`<option value="\${w.id}">\${w.id}</option>\`).join('');
+      } else {
+        select.innerHTML = '<option value="">Belum ada worker, buat dulu</option>';
+      }
+    }
+    
+    function enableCopyDownloadButtons(enabled) {
+      const copyBtn = $('copyCodeBtn');
+      const downloadBtn = $('downloadCodeBtn');
+      if (enabled) {
+        copyBtn.disabled = false;
+        downloadBtn.disabled = false;
+      } else {
+        copyBtn.disabled = true;
+        downloadBtn.disabled = true;
+      }
+    }
+    
+    async function loadWorkerToEditor() {
+      const workerName = $('updateWorkerSelect').value;
+      if (!workerName || !currentAcc) {
+        notify("Pilih worker terlebih dahulu!", true);
         return;
       }
-
+      
+      notify("Mengambil kode worker...");
       try {
-        const configData = JSON.parse(importData);
-
-        if (configData.users && Array.isArray(configData.users)) {
-          // Import users configuration (without API keys for security)
-          showNotification('Configuration imported successfully! Note: API keys need to be re-entered for security.');
-
-          // Clear current data
-          users = [];
-          localStorage.removeItem('cf_users');
-          localStorage.removeItem('cf_current_user');
-
-          // Update UI
-          updateUI();
-
-          // Show login form to add accounts with new API keys
-          document.getElementById('loginForm').style.display = 'block';
+        const res = await fetch('/api/get?name=' + encodeURIComponent(workerName), {
+          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        });
+        const d = await res.json();
+        if (d.success) {
+          $('editor').value = d.code;
+          updateView();
+          $('newWorkerName').value = '';
+          currentLoadedWorkerName = workerName;
+          enableCopyDownloadButtons(true);
+          notify(\`✅ Kode worker "\${workerName}" berhasil dimuat ke editor!\`);
         } else {
-          showNotification('Invalid configuration format', 'error');
+          throw new Error(d.errors?.[0]?.message || "Gagal ambil kode");
         }
-      } catch (error) {
-        showNotification('Error parsing configuration: ' + error.message, 'error');
+      } catch(e) {
+        notify("❌ Gagal ambil kode: " + e.message, true);
+        enableCopyDownloadButtons(false);
       }
     }
 
-    function handleFileImport(event) {
-      const file = event.target.files[0];
-      if (!file) return;
+    function setMode(mode) {
+      currentMode = mode;
+      const singleBtn = $('modeSingleBtn');
+      const multipleBtn = $('modeMultipleBtn');
+      const singleForm = $('singleModeForm');
+      const multipleForm = $('multipleModeForm');
+      
+      if (mode === 'single') {
+        singleBtn.classList.add('active');
+        multipleBtn.classList.remove('active');
+        singleForm.style.display = 'block';
+        multipleForm.style.display = 'none';
+      } else {
+        singleBtn.classList.remove('active');
+        multipleBtn.classList.add('active');
+        singleForm.style.display = 'none';
+        multipleForm.style.display = 'block';
+      }
+    }
+    
+    function clearMultipleInput() {
+      $('multipleDomains').value = '';
+      $('multipleResult').style.display = 'none';
+      $('multipleResult').innerHTML = '';
+    }
+    
+    function parseMultipleDomains(input) {
+      let domains = [];
+      let temp = input.replace(/\\n/g, ',');
+      let parts = temp.split(',');
+      
+      for (let part of parts) {
+        let trimmed = part.trim();
+        if (trimmed) {
+          domains.push(trimmed);
+        }
+      }
+      return domains;
+    }
 
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        readFileContent(file);
+        enableCopyDownloadButtons(true);
+      }
+    }
+
+    function handleDragOver(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      $('fileUploadArea').classList.add('dragover');
+    }
+
+    function handleDragLeave(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      $('fileUploadArea').classList.remove('dragover');
+    }
+
+    function handleFileDrop(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      $('fileUploadArea').classList.remove('dragover');
+      
+      const file = event.dataTransfer.files[0];
+      if (file) {
+        readFileContent(file);
+        enableCopyDownloadButtons(true);
+      }
+    }
+
+    function readFileContent(file) {
+      const validExtensions = ['.js', '.txt', '.mjs', '.cjs'];
+      const fileName = file.name;
+      const fileExt = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+      
+      if (!validExtensions.includes(fileExt)) {
+        notify(\`File type tidak didukung! Gunakan: \${validExtensions.join(', ')}\`, true);
+        return;
+      }
+      
+      notify(\`Membaca file: \${fileName}\`);
+      
       const reader = new FileReader();
       reader.onload = function(e) {
-        document.getElementById('importData').value = e.target.result;
+        const content = e.target.result;
+        $('editor').value = content;
+        updateView();
+        currentLoadedWorkerName = fileName.replace(/\\.[^/.]+$/, "");
+        notify(\`✅ File "\${fileName}" berhasil diimport! (\${(content.length / 1024).toFixed(2)} KB)\`);
+      };
+      reader.onerror = function() {
+        notify("Gagal membaca file!", true);
       };
       reader.readAsText(file);
     }
 
-    function switchTab(tabName) {
-      // Hide all tab contents
-      document.querySelectorAll('.tab-content').forEach(function(tabContent) {
-        tabContent.classList.remove('active');
-      });
-
-      // Remove active class from all tabs
-      document.querySelectorAll('.tab').forEach(function(tab) {
-        tab.classList.remove('active');
-      });
-
-      // Show selected tab content
-      document.getElementById(tabName + 'Tab').classList.add('active');
-
-      // Activate selected tab
-      document.querySelector('.tab[data-tab="' + tabName + '"]').classList.add('active');
-    }
-
-    function toggleAutoRefresh(enabled) {
-      const statusElement = document.getElementById('autoRefreshStatus');
-
-      if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
-      }
-
-      if (enabled) {
-        const interval = parseInt(document.getElementById('autoRefreshInterval').value) * 1000;
-        statusElement.textContent = 'On (' + (interval / 1000) + 's)';
-        autoRefreshInterval = setInterval(fetchAllWorkers, interval);
+    function toggleAddFormSidebar() {
+      const form = $('addAccFormSidebar');
+      const btns = $('accActionBtnsSidebar');
+      if (form.style.display === 'none') {
+        form.style.display = 'block';
+        btns.style.display = 'none';
       } else {
-        statusElement.textContent = 'Off';
+        form.style.display = 'none';
+        btns.style.display = 'block';
+      }
+    }
+    
+    function saveAccountSidebar() {
+      const email = $('accEmailSidebar').value.trim();
+      const key = $('accKeySidebar').value.trim();
+      if(!email || !key) return notify("Isi Email dan Global Key!", true);
+      accounts.push({ email, key });
+      localStorage.setItem('cf_accounts_v2', JSON.stringify(accounts));
+      $('accEmailSidebar').value = '';
+      $('accKeySidebar').value = '';
+      toggleAddFormSidebar();
+      updateAccSelectorSidebar();
+      const sidebarCanvas = bootstrap.Offcanvas.getInstance($('sidebarCanvas'));
+      if (sidebarCanvas) sidebarCanvas.hide();
+    }
+    
+    function deleteAccountSidebar() {
+      const idx = $('accSelectorSidebar').value;
+      if(idx === "-1" || !confirm("Hapus akun ini?")) return;
+      accounts.splice(idx, 1);
+      localStorage.setItem('cf_accounts_v2', JSON.stringify(accounts));
+      updateAccSelectorSidebar();
+    }
+    
+    function switchAccountSidebar() {
+      const idx = $('accSelectorSidebar').value;
+      if(idx !== "-1" && accounts[idx]) {
+        currentAcc = accounts[idx];
+        selectedWorkers.clear();
+        fetchList();
+        $('statusBadge').style.display = 'inline-block';
+        document.getElementById('connectionStatus').innerHTML = 'Connected';
+      } else {
+        $('statusBadge').style.display = 'none';
+      }
+    }
+    
+    function updateAccSelectorSidebar() {
+      if(accounts.length === 0) {
+        $('accSelectorSidebar').innerHTML = '<option value="-1">Belum ada akun</option>';
+        currentAcc = null;
+        $('statusBadge').style.display = 'none';
+      } else {
+        $('accSelectorSidebar').innerHTML = accounts.map((a, i) => \`<option value="\${i}">\${a.email}</option>\`).join('');
+        switchAccountSidebar();
       }
     }
 
-    function showWorkerAnalytics(workerName, accountEmail) {
-      // For demo purposes, show analytics modal with random data
-      showAnalyticsModal();
+    function toggleAddDomainForm() {
+      const form = $('addDomainForm');
+      const btn = $('showAddBtn');
+      if (form.style.display === 'none') {
+        form.style.display = 'block';
+        btn.style.display = 'none';
+      } else {
+        form.style.display = 'none';
+        btn.style.display = 'block';
+      }
     }
 
-    function showNotification(message, type = 'success') {
-      const notification = document.getElementById('notification');
-      notification.textContent = message;
-      notification.className = 'notification ' + (type === 'error' ? 'error' : type === 'warning' ? 'warning' : '');
-      notification.style.display = 'block';
-
-      setTimeout(function() {
-        notification.style.display = 'none';
-      }, 5000);
+    function setExampleUrl(url) {
+      $('githubUrl').value = url;
     }
 
-    // Utility function untuk copy ke clipboard (global)
-    window.copyToClipboard = function(text) {
-      navigator.clipboard.writeText(text).then(function() {
-        showNotification('Copied to clipboard!');
-      });
+    async function fetchList() {
+      if(!currentAcc) {
+        $('workerListContainer').innerHTML = '<div class="text-center text-muted py-3">Pilih akun dulu</div>';
+        return;
+      }
+      
+      notify("Memuat daftar worker...");
+      try {
+        const res = await fetch('/api/list', {
+          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        });
+        const d = await res.json();
+        if(d.success) {
+          workersList = d.result || [];
+          selectedWorkers.clear();
+          renderWorkerList();
+          updateSelectionUI();
+          
+          $('customDomainSelect').disabled = false;
+          $('loadDomainsBtn').disabled = false;
+          $('customDomainSelect').innerHTML = '<option value="">Pilih Worker</option>' + 
+            workersList.map(w => \`<option value="\${w.id}">\${w.id}</option>\`).join('');
+          
+          updateUpdateWorkerSelect();
+          notify(\`✅ \${workersList.length} worker ditemukan\`);
+        } else {
+          throw new Error(d.errors?.[0]?.message || "Gagal load");
+        }
+      } catch(e) { 
+        notify(e.message, true);
+        $('workerListContainer').innerHTML = '<div class="text-center text-danger py-3">Gagal memuat worker</div>';
+      }
+    }
+
+    async function loadCustomDomains() {
+      const workerName = $('customDomainSelect').value;
+      if(!workerName || !currentAcc) {
+        notify("Pilih worker terlebih dahulu!", true);
+        return;
+      }
+      
+      notify("Memuat domain...");
+      try {
+        const res = await fetch('/api/get-custom-domains?name=' + encodeURIComponent(workerName), {
+          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        });
+        const data = await res.json();
+        
+        if(data.success) {
+          availableZones = data.zones || [];
+          const zoneOptions = availableZones.map(z => \`<option value="\${z.zone_id}">\${z.zone_name}</option>\`).join('');
+          $('zoneSelect').innerHTML = zoneOptions;
+          $('zoneSelectMultiple').innerHTML = zoneOptions;
+          
+          currentWorkerDomains = data.customDomains || [];
+          $('domainList').innerHTML = currentWorkerDomains.length === 0 ? 
+            '<div class="text-center text-muted py-3"><i class="fas fa-globe fa-2x mb-2 d-block"></i>Belum ada custom domain</div>' :
+            currentWorkerDomains.map(domain => \`
+              <div class="domain-item p-3 mb-2">
+                <div class="d-flex justify-content-between align-items-start">
+                  <div>
+                    <div class="fw-bold"><i class="fas fa-link text-success me-1"></i> \${domain.hostname}</div>
+                    <div class="small text-success"><i class="fas fa-lock me-1"></i> SSL: Let's Encrypt</div>
+                    <small class="text-muted">Env: \${domain.environment}</small>
+                  </div>
+                  <button class="btn btn-sm btn-outline-danger rounded-circle" onclick="deleteCustomDomain('\${domain.id}')">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              </div>
+            \`).join('');
+          notify("✅ Domain berhasil dimuat!");
+        } else {
+          notify("❌ Gagal load domain: " + (data.error || "Unknown error"), true);
+        }
+      } catch(e) {
+        notify("❌ Gagal load domain: " + e.message, true);
+      }
+    }
+    
+    async function attachCustomDomain() {
+      const workerName = $('customDomainSelect').value;
+      let domainInput = $('newDomain').value.trim();
+      const zoneId = $('zoneSelect').value;
+      
+      if(!workerName || !domainInput || !zoneId) return notify("Lengkapi data domain!", true);
+      
+      const selectedZone = availableZones.find(z => z.zone_id === zoneId);
+      if(!selectedZone) return notify("Zone tidak ditemukan!", true);
+      
+      if (!/^[a-zA-Z0-9.-]+$/.test(domainInput)) {
+        notify("Subdomain hanya boleh berisi huruf, angka, titik, dan strip (-)!", true);
+        return;
+      }
+      
+      const fullDomain = \`\${domainInput}.\${selectedZone.zone_name}\`;
+      
+      if(!fullDomain.match(/^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]\\.[a-zA-Z]{2,}$/)) {
+        notify(\`Domain tidak valid! Pastikan "\${domainInput}" adalah subdomain yang valid.\`, true);
+        return;
+      }
+      
+      notify(\`Mengattach domain \${fullDomain}...\`);
+      try {
+        const res = await fetch('/api/attach-domain', {
+          method: 'POST',
+          headers: {
+            'X-Auth-Email': currentAcc.email,
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ workerName, domain: fullDomain, zoneId })
+        });
+        const d = await res.json();
+        if(d.success) {
+          notify(\`✅ \${d.message}\`);
+          $('newDomain').value = '';
+          toggleAddDomainForm();
+          loadCustomDomains();
+        } else {
+          notify("❌ Gagal: " + (d.message || d.error), true);
+        }
+      } catch(e) {
+        notify("❌ Error: " + e.message, true);
+      }
+    }
+    
+    async function attachMultipleDomains() {
+      const workerName = $('customDomainSelect').value;
+      const domainInput = $('multipleDomains').value.trim();
+      const zoneId = $('zoneSelectMultiple').value;
+      
+      if(!workerName || !domainInput || !zoneId) {
+        notify("Lengkapi data domain!", true);
+        return;
+      }
+      
+      const selectedZone = availableZones.find(z => z.zone_id === zoneId);
+      if(!selectedZone) {
+        notify("Zone tidak ditemukan!", true);
+        return;
+      }
+      
+      const subdomains = parseMultipleDomains(domainInput);
+      
+      if(subdomains.length === 0) {
+        notify("Tidak ada subdomain yang valid!", true);
+        return;
+      }
+      
+      const domains = [];
+      const invalidDomains = [];
+      
+      for (let sub of subdomains) {
+        if (!/^[a-zA-Z0-9.-]+$/.test(sub)) {
+          invalidDomains.push(sub);
+          continue;
+        }
+        const fullDomain = \`\${sub}.\${selectedZone.zone_name}\`;
+        if(fullDomain.match(/^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]\\.[a-zA-Z]{2,}$/)) {
+          domains.push(fullDomain);
+        } else {
+          invalidDomains.push(sub);
+        }
+      }
+      
+      if(domains.length === 0) {
+        notify("Tidak ada domain yang valid untuk diattach!", true);
+        return;
+      }
+      
+      if(invalidDomains.length > 0) {
+        notify(\`⚠️ \${invalidDomains.length} subdomain tidak valid: \${invalidDomains.join(', ')}\`, true);
+      }
+      
+      notify(\`Mengattach \${domains.length} domain ke worker \${workerName}...\`);
+      
+      try {
+        const res = await fetch('/api/attach-multiple-domains', {
+          method: 'POST',
+          headers: {
+            'X-Auth-Email': currentAcc.email,
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ workerName, domains, zoneId })
+        });
+        const result = await res.json();
+        
+        const resultDiv = $('multipleResult');
+        resultDiv.style.display = 'block';
+        
+        let successHtml = '<div class="mt-2"><strong>Hasil Attach Domain:</strong></div>';
+        successHtml += '<div class="mt-2">';
+        for (let r of result.results) {
+          const statusClass = r.success ? 'text-success' : 'text-danger';
+          const statusIcon = r.success ? '✅' : '❌';
+          successHtml += \`
+            <div class="d-flex justify-content-between align-items-center mb-2 p-2 rounded" style="background: rgba(0,0,0,0.3);">
+              <span><code>\${r.domain}</code></span>
+              <span class="\${statusClass}">\${statusIcon} \${r.message}</span>
+            </div>
+          \`;
+        }
+        successHtml += \`</div><div class="mt-2 text-center">Total: \${result.total} | Berhasil: \${result.successCount} | Gagal: \${result.failedCount}</div>\`;
+        resultDiv.innerHTML = successHtml;
+        
+        notify(\`✅ Selesai! \${result.successCount} dari \${result.total} domain berhasil diattach\`, false);
+        loadCustomDomains();
+      } catch(e) {
+        notify("❌ Error: " + e.message, true);
+      }
+    }
+    
+    async function deleteCustomDomain(domainId) {
+      if(!confirm("Yakin ingin menghapus custom domain ini?")) return;
+      
+      notify("Menghapus domain...");
+      try {
+        const res = await fetch('/api/delete-domain', {
+          method: 'POST',
+          headers: {
+            'X-Auth-Email': currentAcc.email,
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ domainId })
+        });
+        const d = await res.json();
+        if(d.success) {
+          notify("✅ Domain berhasil dihapus!");
+          loadCustomDomains();
+        } else {
+          notify("❌ Gagal: " + (d.message || d.error), true);
+        }
+      } catch(e) {
+        notify("❌ Error: " + e.message, true);
+      }
+    }
+
+    async function importFromUrl() {
+      const url = $('githubUrl').value.trim();
+      if(!url) return notify("Masukkan URL!", true);
+      
+      notify("Mengambil kode...");
+      try {
+        const res = await fetch('/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ importUrl: url })
+        });
+        const d = await res.json();
+        if(d.success) {
+          $('editor').value = d.code;
+          updateView();
+          enableCopyDownloadButtons(true);
+          notify("✅ Kode berhasil diimport!");
+        } else {
+          throw new Error(d.error || "Gagal mengambil kode");
+        }
+      } catch(e) {
+        notify("❌ Gagal: " + e.message, true);
+        enableCopyDownloadButtons(false);
+      }
+    }
+
+    async function deployWorker() {
+      let workerName = $('newWorkerName').value.trim();
+      const code = $('editor').value;
+      
+      if(!code) return notify("Kode masih kosong!", true);
+      
+      if (!workerName && currentEditorMode === 'update') {
+        workerName = $('updateWorkerSelect').value;
+        if (!workerName) {
+          return notify("Pilih worker dari dropdown update atau isi nama baru!", true);
+        }
+      }
+      
+      if(!workerName) return notify("Isi nama worker baru atau pilih worker yang akan diupdate!", true);
+      
+      notify("Mendeploy ke Cloudflare...");
+      try {
+        const res = await fetch('/api/update', {
+          method: 'POST',
+          headers: { 
+            'X-Auth-Email': currentAcc.email, 
+            'X-Auth-Key': currentAcc.key,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name: workerName, code: code })
+        });
+        const d = await res.json();
+        if(d.success) {
+          const deployUrl = d.subdomain || \`https://\${workerName}.workers.dev\`;
+          notify(\`✅ BERHASIL DI-DEPLOY!\\nWorker: \${workerName}\\nURL: \${deployUrl}\`);
+          fetchList();
+          $('newWorkerName').value = '';
+          currentLoadedWorkerName = workerName;
+          if (currentEditorMode === 'update') {
+            $('updateWorkerSelect').value = '';
+          }
+          enableCopyDownloadButtons(true);
+        } else {
+          notify("❌ Gagal: " + (d.errors?.[0]?.message || "Unknown error"), true);
+        }
+      } catch(e) { 
+        notify("❌ Network Error: " + e.message, true); 
+      }
+    }
+
+    function updateView() {
+      let code = $('editor').value;
+      if(code && code[code.length-1] == "\\n") code += " ";
+      $('highlighting-content').textContent = code || '';
+      Prism.highlightElement($('highlighting-content'));
+    }
+
+    function syncScroll() {
+      $('highlighting').scrollTop = $('editor').scrollTop;
+      $('highlighting').scrollLeft = $('editor').scrollLeft;
+    }
+
+    updateAccSelectorSidebar();
+    setMode('single');
+    
+    $('editorPanel').style.display = 'none';
+    enableCopyDownloadButtons(false);
+
+    $('editor').onkeydown = function(e) {
+      if(e.key == 'Tab') {
+        e.preventDefault();
+        const s = this.selectionStart;
+        this.value = this.value.substring(0, s) + "  " + this.value.substring(this.selectionEnd);
+        this.selectionEnd = s + 2;
+        updateView();
+      }
     };
-
-    // Global functions untuk event handlers
-    window.toggleWorkerSelection = toggleWorkerSelection;
-    window.viewWorkerConfig = viewWorkerConfig;
-    window.editWorker = editWorker;
-    window.showWorkerAnalytics = showWorkerAnalytics;
-    window.deleteWorker = deleteWorker;
-    window.showBulkActionsModal = showBulkActionsModal;
-    window.bulkDeleteWorkers = bulkDeleteWorkers;
-    window.switchUser = switchUser;
-    window.logoutUser = logoutUser;
-    window.copyToClipboard = copyToClipboard;
   </script>
 </body>
 </html>
-`;
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    if (url.pathname.startsWith('/api/')) {
-      return handleApiRequest(request);
-    }
-
-    return new Response(HTML_CONTENT, {
-      headers: { "Content-Type": "text/html;charset=UTF-8" }
-    });
-  }
+    `;
+    return new Response(html, { headers: { 'content-type': 'text/html;charset=UTF-8' } });
+  },
 };
