@@ -181,6 +181,12 @@ class CfClient {
   async listCustomDomains(accountId, serviceName) {
     return this._fetch(`/accounts/${accountId}/workers/domains?service=${serviceName}`);
   }
+
+  async deleteCustomDomain(accountId, domainId) {
+    return this._fetch(`/accounts/${accountId}/workers/domains/${domainId}`, {
+      method: 'DELETE'
+    });
+  }
 }
 
 // ==================== HANDLERS ====================
@@ -215,7 +221,7 @@ async function handleApiRequest(request) {
 
     const body = await request.json();
     const { email, globalAPIKey, accountId } = body;
-    const client = new CfClient(email, globalAPIKey);
+    const client = (email && globalAPIKey) ? new CfClient(email, globalAPIKey) : null;
 
     switch (path) {
       case '/api/userInfo':
@@ -227,9 +233,10 @@ async function handleApiRequest(request) {
       case '/api/listWorkers':
         return new Response(JSON.stringify(await client.listWorkers(accountId)), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-      case '/api/getWorkerScript':
+      case '/api/getWorkerScript': {
         const script = await client.getWorkerScript(accountId, body.workerName);
         return new Response(JSON.stringify({ success: true, scriptContent: script }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
 
       case '/api/updateWorker':
         await client.updateWorker(accountId, body.workerName, body.scriptContent);
@@ -240,15 +247,35 @@ async function handleApiRequest(request) {
         return new Response(JSON.stringify({ success: true, message: "Worker deleted" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
       case '/api/bulkDeleteWorkers': {
-        const delResults = await Promise.allSettled(body.workerNames.map(name => client.deleteWorker(accountId, name)));
-        return new Response(JSON.stringify({ success: true, results: delResults }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        const results = await Promise.all(body.workerNames.map(async (name) => {
+          try {
+            await client.deleteWorker(accountId, name);
+            return { name, success: true };
+          } catch (e) {
+            return { name, success: false, error: e.message };
+          }
+        }));
+        const successCount = results.filter(r => r.success).length;
+        return new Response(JSON.stringify({
+          success: true,
+          total: results.length,
+          successCount,
+          failedCount: results.length - successCount,
+          results
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
       case '/api/createWorker': {
-        const { workerName, workerScriptUrl, template } = body;
-        const targetUrl = workerScriptUrl || DEFAULT_SCRIPT_URL;
-        const res = await fetch(targetUrl);
-        let script = await res.text();
+        const { workerName, workerScriptUrl, template, scriptContent } = body;
+        let script = "";
+        if (scriptContent) {
+          script = scriptContent;
+        } else {
+          const targetUrl = workerScriptUrl || DEFAULT_SCRIPT_URL;
+          const res = await fetch(targetUrl);
+          script = await res.text();
+        }
+
         const uuid = generateUUID();
         script = script.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, uuid);
 
@@ -268,6 +295,7 @@ async function handleApiRequest(request) {
           success: true,
           message: "Worker created",
           url: `https://${host}`,
+          subdomain: `https://${host}`,
           proxyIP,
           vless: `vless://${uuid}@suporte.garena.com:443?encryption=none&security=tls&sni=${host}&fp=randomized&type=ws&host=${host}&path=${pathSuffix}#${result.workerName}`,
           trojan: `trojan://${uuid}@suporte.garena.com:443?sni=${host}&type=ws&host=${host}&path=${pathSuffix}#${result.workerName}`
@@ -275,14 +303,14 @@ async function handleApiRequest(request) {
       }
 
       case '/api/bulkCreateWorkers': {
-        const { accounts, workerName, workerScriptUrl, template } = body;
+        const { accounts: targetAccounts, workerName, workerScriptUrl, template } = body;
         const targetUrl = workerScriptUrl || DEFAULT_SCRIPT_URL;
         const sRes = await fetch(targetUrl);
         const baseScript = await sRes.text();
 
-        const results = await Promise.all(accounts.map(async (acc) => {
+        const results = await Promise.all(targetAccounts.map(async (acc) => {
           try {
-            const accClient = new CfClient(acc.email, acc.apiKey);
+            const accClient = new CfClient(acc.email, acc.key);
             const uuid = generateUUID();
             let script = baseScript.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, uuid);
 
@@ -331,6 +359,92 @@ async function handleApiRequest(request) {
         const data = await client.listCustomDomains(accountId, body.serviceName);
         const domains = data.result.map(d => d.hostname);
         return new Response(JSON.stringify({ success: true, domains }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      // New standardized endpoints for frontend
+      case '/api/list':
+        return new Response(JSON.stringify(await client.listWorkers(accountId)), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+      case '/api/delete':
+        await client.deleteWorker(accountId, body.name);
+        return new Response(JSON.stringify({ success: true, message: "Worker deleted" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+      case '/api/delete-bulk': {
+        const results = await Promise.all(body.names.map(async (name) => {
+          try {
+            await client.deleteWorker(accountId, name);
+            return { name, success: true };
+          } catch (e) {
+            return { name, success: false, error: e.message };
+          }
+        }));
+        const successCount = results.filter(r => r.success).length;
+        return new Response(JSON.stringify({
+          success: true,
+          total: results.length,
+          successCount,
+          failedCount: results.length - successCount,
+          results
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/get': {
+        const scriptContent = await client.getWorkerScript(accountId, body.name);
+        return new Response(JSON.stringify({ success: true, code: scriptContent }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/update': {
+        await client.updateWorker(accountId, body.name, body.code);
+        return new Response(JSON.stringify({ success: true, message: "Worker updated" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/import': {
+        const res = await fetch(body.importUrl);
+        if (!res.ok) throw new Error(`Failed to fetch from URL: ${res.status}`);
+        const code = await res.text();
+        return new Response(JSON.stringify({ success: true, code }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/get-custom-domains': {
+        const zonesData = await client.listZones();
+        const zones = zonesData.result.map(z => ({ zone_id: z.id, zone_name: z.name }));
+        const domainsData = await client.listCustomDomains(accountId, body.name);
+        return new Response(JSON.stringify({
+          success: true,
+          customDomains: domainsData.result,
+          zones
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/attach-domain': {
+        const { workerName, domain, zoneId } = body;
+        await client.registerCustomDomain(accountId, workerName, domain, zoneId);
+        return new Response(JSON.stringify({ success: true, message: `Domain ${domain} attached to ${workerName}` }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/attach-multiple-domains': {
+        const { workerName, domains, zoneId } = body;
+        const results = await Promise.all(domains.map(async (domain) => {
+          try {
+            await client.registerCustomDomain(accountId, workerName, domain, zoneId);
+            return { domain, success: true, message: "Attached" };
+          } catch (e) {
+            return { domain, success: false, message: e.message };
+          }
+        }));
+        const successCount = results.filter(r => r.success).length;
+        return new Response(JSON.stringify({
+          success: true,
+          total: results.length,
+          successCount,
+          failedCount: results.length - successCount,
+          results
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      case '/api/delete-domain': {
+        await client.deleteCustomDomain(accountId, body.domainId);
+        return new Response(JSON.stringify({ success: true, message: "Domain deleted" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
       default:
@@ -811,6 +925,24 @@ async function handleApiRequest(request) {
         </button>
       </div>
       
+      <div id="userInfoPanel" class="mt-4 p-3 rounded" style="background: rgba(255,255,255,0.05); display: none;">
+        <h6 class="text-info small fw-bold mb-2"><i class="fas fa-id-card me-1"></i> Account Info</h6>
+        <div class="small text-light">
+          <div class="mb-1 d-flex justify-content-between">
+            <span class="text-muted">Name:</span>
+            <span id="ui-name">-</span>
+          </div>
+          <div class="mb-1 d-flex justify-content-between">
+            <span class="text-muted">Account ID:</span>
+            <span id="ui-id" style="font-family: monospace;">-</span>
+          </div>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted">Status:</span>
+            <span id="ui-status" class="badge bg-success">Active</span>
+          </div>
+        </div>
+      </div>
+
       <hr class="my-4" style="border-color: rgba(102, 126, 234, 0.3);">
       
       <div class="text-center">
@@ -939,6 +1071,20 @@ async function handleApiRequest(request) {
                     <small class="text-muted">From Existing</small>
                   </div>
                 </div>
+                <div class="col-6">
+                  <div id="modeQuick" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('quick')">
+                    <i class="fas fa-bolt fa-2x mb-2" style="color: #f1c40f;"></i>
+                    <div class="fw-bold small">Quick Create</div>
+                    <small class="text-muted">Use Template</small>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div id="modeBulk" class="mode-option p-3 rounded text-center" onclick="selectEditorMode('bulk')">
+                    <i class="fas fa-layer-group fa-2x mb-2" style="color: #e67e22;"></i>
+                    <div class="fw-bold small">Bulk Create</div>
+                    <small class="text-muted">Multi Accounts</small>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -993,7 +1139,30 @@ async function handleApiRequest(request) {
                 </div>
               </div>
 
-              <div class="mb-3">
+              <div id="panelQuick" class="editor-mode-card mb-3" style="display: none;">
+                <label class="form-label">🚀 Select Template:</label>
+                <select id="templateSelect" class="form-select mb-3">
+                  <option value="nautica">Nautica (Standard)</option>
+                  <option value="nautica-mod">Nautica Mod</option>
+                  <option value="vless">Standard VLess</option>
+                  <option value="trojan">Standard Trojan</option>
+                </select>
+                <div class="alert alert-warning bg-warning bg-opacity-10 border-warning text-white small">
+                  <i class="fas fa-magic me-1"></i> Template akan otomatis mengganti UUID dan Proxy IP (untuk Nautica).
+                </div>
+              </div>
+
+              <div id="panelBulk" class="editor-mode-card mb-3" style="display: none;">
+                <label class="form-label">👥 Select Target Accounts:</label>
+                <div id="bulkAccountsList" class="mb-3 p-2 border border-secondary rounded" style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.2);">
+                  <!-- Dynamic check list -->
+                </div>
+                <div class="alert alert-info bg-info bg-opacity-10 border-info text-white small">
+                  <i class="fas fa-users me-1"></i> Worker akan dideploy ke semua akun yang dipilih secara bersamaan.
+                </div>
+              </div>
+
+              <div class="mb-3" id="workerNameInputGroup">
                 <label class="form-label fw-bold">✏️ Worker Name:</label>
                 <input type="text" id="newWorkerName" class="form-control" placeholder="contoh: my-worker" />
                 <small class="text-muted">* Isi untuk deploy baru, kosongkan jika update worker yang dipilih</small>
@@ -1176,12 +1345,13 @@ async function handleApiRequest(request) {
       try {
         const res = await fetch('/api/delete-bulk', {
           method: 'POST',
-          headers: {
-            'X-Auth-Email': currentAcc.email,
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ names: workerNames })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            names: workerNames
+          })
         });
         const result = await res.json();
         
@@ -1257,13 +1427,14 @@ async function handleApiRequest(request) {
       notify(\`Menghapus \${workerName}...\`);
       try {
         const res = await fetch('/api/delete', {
-          method: 'DELETE',
-          headers: {
-            'X-Auth-Email': currentAcc.email,
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ name: workerName })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            name: workerName
+          })
         });
         const d = await res.json();
         if (d.success) {
@@ -1294,8 +1465,15 @@ async function handleApiRequest(request) {
       notify(\`Mengambil konfigurasi \${workerName}...\`);
       
       try {
-        const res = await fetch('/api/get?name=' + encodeURIComponent(workerName), {
-          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        const res = await fetch('/api/get', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            name: workerName
+          })
         });
         const d = await res.json();
         
@@ -1432,8 +1610,15 @@ async function handleApiRequest(request) {
     
     async function loadDomainsForConfig(workerName) {
       try {
-        const res = await fetch('/api/get-custom-domains?name=' + encodeURIComponent(workerName), {
-          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        const res = await fetch('/api/get-custom-domains', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            name: workerName
+          })
         });
         const data = await res.json();
         const container = document.getElementById('configDomainsList');
@@ -1503,8 +1688,10 @@ async function handleApiRequest(request) {
       $('panelImportFile').style.display = 'none';
       $('panelManual').style.display = 'none';
       $('panelUpdate').style.display = 'none';
+      $('panelQuick').style.display = 'none';
+      $('panelBulk').style.display = 'none';
       
-      const modes = ['url', 'file', 'manual', 'update'];
+      const modes = ['url', 'file', 'manual', 'update', 'quick', 'bulk'];
       modes.forEach(m => {
         const el = $('mode' + m.charAt(0).toUpperCase() + m.slice(1));
         if (el) el.classList.remove('selected');
@@ -1525,7 +1712,30 @@ async function handleApiRequest(request) {
         $('panelUpdate').style.display = 'block';
         $('modeUpdate').classList.add('selected');
         updateUpdateWorkerSelect();
+      } else if (mode === 'quick') {
+        $('panelQuick').style.display = 'block';
+        $('modeQuick').classList.add('selected');
+      } else if (mode === 'bulk') {
+        $('panelBulk').style.display = 'block';
+        $('modeBulk').classList.add('selected');
+        renderBulkAccountsList();
       }
+    }
+
+    function renderBulkAccountsList() {
+      const container = $('bulkAccountsList');
+      if (accounts.length === 0) {
+        container.innerHTML = '<div class="text-muted small">Belum ada akun tersimpan</div>';
+        return;
+      }
+      container.innerHTML = accounts.map(function(acc, i) {
+        return '<div class="form-check small">' +
+          '<input class="form-check-input bulk-acc-check" type="checkbox" value="' + i + '" id="bulkAcc-' + i + '" checked>' +
+          '<label class="form-check-label text-light" for="bulkAcc-' + i + '">' +
+            acc.email + ' (' + (acc.accountName || acc.accountId.slice(0,8)) + ')' +
+          '</label>' +
+        '</div>';
+      }).join('');
     }
     
     function updateUpdateWorkerSelect() {
@@ -1559,8 +1769,15 @@ async function handleApiRequest(request) {
       
       notify("Mengambil kode worker...");
       try {
-        const res = await fetch('/api/get?name=' + encodeURIComponent(workerName), {
-          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        const res = await fetch('/api/get', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            name: workerName
+          })
         });
         const d = await res.json();
         if (d.success) {
@@ -1689,18 +1906,37 @@ async function handleApiRequest(request) {
       }
     }
     
-    function saveAccountSidebar() {
+    async function saveAccountSidebar() {
       const email = $('accEmailSidebar').value.trim();
       const key = $('accKeySidebar').value.trim();
       if(!email || !key) return notify("Isi Email dan Global Key!", true);
-      accounts.push({ email, key });
-      localStorage.setItem('cf_accounts_v2', JSON.stringify(accounts));
-      $('accEmailSidebar').value = '';
-      $('accKeySidebar').value = '';
-      toggleAddFormSidebar();
-      updateAccSelectorSidebar();
-      const sidebarCanvas = bootstrap.Offcanvas.getInstance($('sidebarCanvas'));
-      if (sidebarCanvas) sidebarCanvas.hide();
+
+      notify("Memverifikasi akun...");
+      try {
+        const res = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, globalAPIKey: key })
+        });
+        const d = await res.json();
+        if (d.success && d.result && d.result.length > 0) {
+          const accountId = d.result[0].id;
+          const accountName = d.result[0].name;
+          accounts.push({ email, key, accountId, accountName });
+          localStorage.setItem('cf_accounts_v2', JSON.stringify(accounts));
+          $('accEmailSidebar').value = '';
+          $('accKeySidebar').value = '';
+          toggleAddFormSidebar();
+          updateAccSelectorSidebar();
+          notify("✅ Akun " + email + " berhasil ditambahkan!");
+          const sidebarCanvas = bootstrap.Offcanvas.getInstance($('sidebarCanvas'));
+          if (sidebarCanvas) sidebarCanvas.hide();
+        } else {
+          throw new Error("Gagal mendapatkan Account ID. Pastikan API Key benar.");
+        }
+      } catch (e) {
+        notify("❌ Gagal: " + e.message, true);
+      }
     }
     
     function deleteAccountSidebar() {
@@ -1719,8 +1955,13 @@ async function handleApiRequest(request) {
         fetchList();
         $('statusBadge').style.display = 'inline-block';
         document.getElementById('connectionStatus').innerHTML = 'Connected';
+
+        $('userInfoPanel').style.display = 'block';
+        $('ui-id').innerText = currentAcc.accountId ? currentAcc.accountId.slice(0, 16) + '...' : '-';
+        $('ui-name').innerText = currentAcc.accountName || '-';
       } else {
         $('statusBadge').style.display = 'none';
+        $('userInfoPanel').style.display = 'none';
       }
     }
     
@@ -1756,11 +1997,42 @@ async function handleApiRequest(request) {
         $('workerListContainer').innerHTML = '<div class="text-center text-muted py-3">Pilih akun dulu</div>';
         return;
       }
+
+      if (!currentAcc.accountId) {
+        notify("Mendapatkan Account ID...");
+        try {
+          const res = await fetch('/api/accounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentAcc.email, globalAPIKey: currentAcc.key })
+          });
+          const d = await res.json();
+          if (d.success && d.result && d.result.length > 0) {
+            currentAcc.accountId = d.result[0].id;
+            currentAcc.accountName = d.result[0].name;
+            const idx = accounts.findIndex(a => a.email === currentAcc.email);
+            if (idx !== -1) {
+              accounts[idx] = currentAcc;
+              localStorage.setItem('cf_accounts_v2', JSON.stringify(accounts));
+            }
+            $('ui-id').innerText = currentAcc.accountId.slice(0, 16) + '...';
+            $('ui-name').innerText = currentAcc.accountName || '-';
+          }
+        } catch(e) {
+          console.error("Failed to auto-fetch account ID:", e);
+        }
+      }
       
       notify("Memuat daftar worker...");
       try {
         const res = await fetch('/api/list', {
-          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId
+          })
         });
         const d = await res.json();
         if(d.success) {
@@ -1794,8 +2066,15 @@ async function handleApiRequest(request) {
       
       notify("Memuat domain...");
       try {
-        const res = await fetch('/api/get-custom-domains?name=' + encodeURIComponent(workerName), {
-          headers: { 'X-Auth-Email': currentAcc.email, 'X-Auth-Key': currentAcc.key }
+        const res = await fetch('/api/get-custom-domains', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            name: workerName
+          })
         });
         const data = await res.json();
         
@@ -1857,12 +2136,13 @@ async function handleApiRequest(request) {
       try {
         const res = await fetch('/api/attach-domain', {
           method: 'POST',
-          headers: {
-            'X-Auth-Email': currentAcc.email,
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ workerName, domain: fullDomain, zoneId })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            workerName, domain: fullDomain, zoneId
+          })
         });
         const d = await res.json();
         if(d.success) {
@@ -1931,12 +2211,13 @@ async function handleApiRequest(request) {
       try {
         const res = await fetch('/api/attach-multiple-domains', {
           method: 'POST',
-          headers: {
-            'X-Auth-Email': currentAcc.email,
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ workerName, domains, zoneId })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            workerName, domains, zoneId
+          })
         });
         const result = await res.json();
         
@@ -1972,12 +2253,13 @@ async function handleApiRequest(request) {
       try {
         const res = await fetch('/api/delete-domain', {
           method: 'POST',
-          headers: {
-            'X-Auth-Email': currentAcc.email,
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ domainId })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            domainId
+          })
         });
         const d = await res.json();
         if(d.success) {
@@ -2000,7 +2282,12 @@ async function handleApiRequest(request) {
         const res = await fetch('/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ importUrl: url })
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            importUrl: url
+          })
         });
         const d = await res.json();
         if(d.success) {
@@ -2017,36 +2304,122 @@ async function handleApiRequest(request) {
       }
     }
 
+    async function deployBulk() {
+      const workerName = $('newWorkerName').value.trim();
+      const code = $('editor').value;
+      const selectedAccIndices = Array.from(document.querySelectorAll('.bulk-acc-check:checked')).map(el => parseInt(el.value));
+
+      if (!workerName) return notify("Isi nama worker!", true);
+      if (selectedAccIndices.length === 0) return notify("Pilih minimal satu akun!", true);
+
+      const targetAccounts = selectedAccIndices.map(idx => accounts[idx]);
+
+      notify("Mendeploy ke " + targetAccounts.length + " akun...");
+      try {
+        const res = await fetch('/api/bulkCreateWorkers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAcc.email,
+            globalAPIKey: currentAcc.key,
+            accountId: currentAcc.accountId,
+            accounts: targetAccounts,
+            workerName,
+            scriptContent: code
+          })
+        });
+        const d = await res.json();
+        if (d.success) {
+          var successCount = d.results.filter(function(r) { return r.success; }).length;
+          var failedCount = d.results.filter(function(r) { return !r.success; }).length;
+          var msg = "✅ Selesai! " + successCount + " berhasil, " + failedCount + " gagal.";
+          notify(msg);
+          fetchList();
+        } else {
+          throw new Error(d.message || "Bulk deploy gagal");
+        }
+      } catch (e) {
+        notify("❌ Error: " + e.message, true);
+      }
+    }
+
     async function deployWorker() {
+      if (currentEditorMode === 'bulk') {
+        return deployBulk();
+      }
+
       let workerName = $('newWorkerName').value.trim();
       const code = $('editor').value;
       
-      if(!code) return notify("Kode masih kosong!", true);
+      if (currentEditorMode !== 'quick' && !code) return notify("Kode masih kosong!", true);
       
       if (!workerName && currentEditorMode === 'update') {
         workerName = $('updateWorkerSelect').value;
-        if (!workerName) {
-          return notify("Pilih worker dari dropdown update atau isi nama baru!", true);
-        }
       }
       
-      if(!workerName) return notify("Isi nama worker baru atau pilih worker yang akan diupdate!", true);
+      if(!workerName) return notify("Isi nama worker!", true);
       
       notify("Mendeploy ke Cloudflare...");
       try {
-        const res = await fetch('/api/update', {
+        let endpoint = '/api/update';
+        let payload = {
+          email: currentAcc.email,
+          globalAPIKey: currentAcc.key,
+          accountId: currentAcc.accountId,
+          name: workerName,
+          workerName: workerName,
+          code: code,
+          scriptContent: code
+        };
+
+        if (currentEditorMode === 'quick') {
+          endpoint = '/api/createWorker';
+          payload.template = $('templateSelect').value;
+        }
+
+        const res = await fetch(endpoint, {
           method: 'POST',
-          headers: { 
-            'X-Auth-Email': currentAcc.email, 
-            'X-Auth-Key': currentAcc.key,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ name: workerName, code: code })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
         const d = await res.json();
         if(d.success) {
-          const deployUrl = d.subdomain || \`https://\${workerName}.workers.dev\`;
-          notify(\`✅ BERHASIL DI-DEPLOY!\\nWorker: \${workerName}\\nURL: \${deployUrl}\`);
+          const deployUrl = d.subdomain || d.url || \`https://\${workerName}.workers.dev\`;
+          let successMsg = \`✅ BERHASIL DI-DEPLOY!\\nWorker: \${workerName}\\nURL: \${deployUrl}\`;
+          if (d.vless) {
+            successMsg += '\\n\\nVLess Config generated (Check console or click copy button if available)';
+            console.log("VLESS:", d.vless);
+            console.log("TROJAN:", d.trojan);
+
+            var configResultModal = '<div class="modal fade" id="deployResultModal" tabindex="-1">' +
+                '<div class="modal-dialog modal-dialog-centered">' +
+                  '<div class="modal-content bg-dark text-white border-secondary">' +
+                    '<div class="modal-header">' +
+                      '<h5 class="modal-title text-success">🚀 Deployment Successful</h5>' +
+                      '<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>' +
+                    '</div>' +
+                    '<div class="modal-body">' +
+                      '<p>Worker <strong>' + workerName + '</strong> has been deployed.</p>' +
+                      '<div class="mb-3">' +
+                        '<label class="small text-muted">VLess Config:</label>' +
+                        '<textarea class="form-control bg-black text-info small" rows="3" readonly>' + d.vless + '</textarea>' +
+                        '<button class="btn btn-sm btn-outline-info mt-1 w-100" onclick="copyToClipboard(\'' + d.vless + '\', \'✅ VLess Config Copied!\')">Copy VLess</button>' +
+                      '</div>' +
+                      '<div class="mb-3">' +
+                        '<label class="small text-muted">Trojan Config:</label>' +
+                        '<textarea class="form-control bg-black text-warning small" rows="3" readonly>' + d.trojan + '</textarea>' +
+                        '<button class="btn btn-sm btn-outline-warning mt-1 w-100" onclick="copyToClipboard(\'' + d.trojan + '\', \'✅ Trojan Config Copied!\')">Copy Trojan</button>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                '</div>' +
+              '</div>';
+            const existingModal = document.getElementById('deployResultModal');
+            if (existingModal) existingModal.remove();
+            document.body.insertAdjacentHTML('beforeend', configResultModal);
+            new bootstrap.Modal(document.getElementById('deployResultModal')).show();
+          }
+          notify(successMsg);
           fetchList();
           $('newWorkerName').value = '';
           currentLoadedWorkerName = workerName;
