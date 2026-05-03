@@ -369,9 +369,11 @@ const HTML_CONTENT = `
     .btn-warning:hover { background: #d97706; }
     .btn-info { background: #06b6d4; color: white; }
     .btn-info:hover { background: #0891b2; }
-    .worker-item { background: #1e293b; border: 1px solid #334155; transition: all 0.2s; }
-    .worker-item:hover { border-color: #3b82f6; }
-    .worker-item.selected { background: #1e3a8a; border-color: #3b82f6; }
+    .worker-item { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255, 255, 255, 0.05); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .worker-item:hover { border-color: rgba(59, 130, 246, 0.5); background: rgba(30, 41, 59, 0.6); transform: translateY(-2px); box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5); }
+    .worker-item.selected { background: rgba(30, 58, 138, 0.4); border-color: #3b82f6; }
+    .dropdown-content { display: none; }
+    .dropdown:hover .dropdown-content { display: block; }
     .notification { position: fixed; top: 1.5rem; right: 1.5rem; z-index: 9999; animation: slideIn 0.3s ease-out; }
     @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     .progress-bar { background: #1a1a1a; border-radius: 5px; height: 10px; overflow: hidden; }
@@ -468,7 +470,7 @@ const HTML_CONTENT = `
               <input type="checkbox" id="autoRefreshToggle" class="rounded bg-slate-700">
            </div>
         </div>
-        <div id="workersList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+        <div id="workersList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6"></div>
       </section>
     </main>
   </div>
@@ -567,6 +569,7 @@ const HTML_CONTENT = `
         <button id="autoDiscoverBtn" class="btn bg-slate-700">Auto Discover</button>
         <button id="listWildcardBtn" class="btn bg-slate-700">List Domains</button>
         <button id="submitWildcard" class="btn btn-success px-8">Register</button>
+        <button onclick="document.getElementById('wildcardModal').classList.add('hidden')" class="btn bg-slate-600">Close</button>
       </div>
     </div>
   </div>
@@ -809,25 +812,46 @@ const HTML_CONTENT = `
     }
 
     function displayWorkers() {
-      const list = document.getElementById('workersList');
-      if (allWorkers.length === 0) { list.innerHTML = '<div class="col-span-full text-center py-20 text-slate-500">No workers.</div>'; return; }
-      let filtered = allWorkers;
-      if (currentSearchTerm) filtered = filtered.filter(w => w.id.toLowerCase().includes(currentSearchTerm));
-      if (currentFilterAccount) filtered = filtered.filter(w => w.account === currentFilterAccount);
-      list.innerHTML = filtered.map(w => {
-        const sel = selectedWorkers.has(w.id);
-        return '<div class="worker-item p-5 rounded-2xl flex flex-col gap-4 ' + (sel ? 'selected' : '') + '">' +
-          '<div class="flex items-center gap-3">' +
-            '<input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="toggleWorkerSelection(\'' + w.id + '\', this.checked)" class="w-5 h-5">' +
-            '<div class="truncate"><h4 class="font-bold">' + w.id + '</h4><p class="text-xs text-slate-500">' + w.account + '</p></div>' +
+      var list = document.getElementById('workersList');
+      if (allWorkers.length === 0) { list.innerHTML = '<div class="col-span-full text-center py-20 text-slate-500">No workers found.</div>'; return; }
+      var filtered = allWorkers;
+      if (currentSearchTerm) {
+        filtered = filtered.filter(function(w) { return w.id.toLowerCase().indexOf(currentSearchTerm) !== -1; });
+      }
+      if (currentFilterAccount) {
+        filtered = filtered.filter(function(w) { return w.account === currentFilterAccount; });
+      }
+
+      var html = '';
+      for (var i = 0; i < filtered.length; i++) {
+        var w = filtered[i];
+        var sel = selectedWorkers.has(w.id);
+        html += '<div class="worker-item p-4 rounded-2xl flex items-center justify-between gap-4 ' + (sel ? 'selected' : '') + '">' +
+          '<div class="flex items-center gap-4 overflow-hidden">' +
+            '<input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="toggleWorkerSelection(\'' + w.id + '\', this.checked)" class="w-5 h-5 rounded-lg border-slate-700 bg-slate-800 text-blue-600 focus:ring-blue-500">' +
+            '<div class="p-3 bg-blue-500/10 rounded-xl text-blue-500 hidden sm:block">' +
+               '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>' +
+            '</div>' +
+            '<div class="truncate">' +
+              '<h4 class="font-bold text-slate-100">' + w.id + '</h4>' +
+              '<p class="text-[10px] text-slate-500 truncate">' + w.account + '</p>' +
+            '</div>' +
           '</div>' +
-          '<div class="grid grid-cols-2 gap-2">' +
-            '<button onclick="viewWorkerConfig(\'' + w.id + '\', \'' + w.account + '\')" class="btn bg-slate-800 text-xs">Config</button>' +
-            '<button onclick="editWorker(\'' + w.id + '\', \'' + w.account + '\', \'' + w.accountId + '\')" class="btn bg-slate-800 text-xs">Edit</button>' +
-            '<button onclick="showAnalyticsModal()" class="btn bg-slate-800 text-xs">Stats</button>' +
-            '<button onclick="deleteWorker(\'' + w.id + '\', \'' + w.account + '\', \'' + w.accountId + '\')" class="btn bg-red-900/30 text-red-400 text-xs">Delete</button>' +
-          '</div></div>';
-      }).join('');
+          '<div class="dropdown relative">' +
+             '<button class="p-2 hover:bg-slate-700/50 rounded-xl transition-colors text-slate-400 hover:text-white">' +
+                '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>' +
+             '</button>' +
+             '<div class="dropdown-content absolute right-0 mt-2 w-48 glass rounded-2xl shadow-2xl z-10 border border-white/10 overflow-hidden py-1">' +
+                '<button onclick="viewWorkerConfig(\'' + w.id + '\', \'' + w.account + '\')" class="w-full text-left px-4 py-2 text-sm hover:bg-blue-600 text-slate-200 transition-colors">Config</button>' +
+                '<button onclick="editWorker(\'' + w.id + '\', \'' + w.account + '\', \'' + w.accountId + '\')" class="w-full text-left px-4 py-2 text-sm hover:bg-blue-600 text-slate-200 transition-colors">Edit Script</button>' +
+                '<button onclick="showAnalyticsModal()" class="w-full text-left px-4 py-2 text-sm hover:bg-blue-600 text-slate-200 transition-colors">Analytics</button>' +
+                '<div class="border-t border-white/5 my-1"></div>' +
+                '<button onclick="deleteWorker(\'' + w.id + '\', \'' + w.account + '\', \'' + w.accountId + '\')" class="w-full text-left px-4 py-2 text-sm hover:bg-red-600 text-red-400 hover:text-white transition-colors">Delete</button>' +
+             '</div>' +
+          '</div>' +
+        '</div>';
+      }
+      list.innerHTML = html;
       updateSelectedCount();
     }
 
