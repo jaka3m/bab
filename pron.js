@@ -1439,13 +1439,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
             var u = users[currentUserIndex];
             if (!u) return;
             var content = document.getElementById('userDetailContent');
-            content.innerHTML = `
-                <div style="display: flex; flex-direction: column; gap: 16px;">
-                    <div><label style="color: rgba(255,255,255,0.6);">Email</label><p style="font-weight: 600;">${u.email}</p></div>
-                    <div><label style="color: rgba(255,255,255,0.6);">Account ID</label><p style="font-family: monospace;">${u.accountId}</p></div>
-                    <div><label style="color: rgba(255,255,255,0.6);">Status</label><p style="color: #4facfe;">✓ Connected</p></div>
-                </div>
-            `;
+            content.innerHTML = '<div style="display: flex; flex-direction: column; gap: 16px;">' +
+                '<div><label style="color: rgba(255,255,255,0.6);">Email</label><p style="font-weight: 600;">' + u.email + '</p></div>' +
+                '<div><label style="color: rgba(255,255,255,0.6);">Account ID</label><p style="font-family: monospace;">' + u.accountId + '</p></div>' +
+                '<div><label style="color: rgba(255,255,255,0.6);">Status</label><p style="color: #4facfe;">✓ Connected</p></div>' +
+            '</div>';
             document.getElementById('userDetailModal').classList.add('active');
         }
 
@@ -1485,13 +1483,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         function viewWorkerConfig(name, email) {
             var content = document.getElementById('configResultsContent');
-            content.innerHTML = `
-                <div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 12px;">
-                    <p><strong>Worker Name:</strong> ${name}</p>
-                    <p><strong>Account:</strong> ${email}</p>
-                    <p><strong>Status:</strong> <span style="color: #4facfe;">Active</span></p>
-                </div>
-            `;
+            content.innerHTML = '<div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 12px;">' +
+                '<p><strong>Worker Name:</strong> ' + name + '</p>' +
+                '<p><strong>Account:</strong> ' + email + '</p>' +
+                '<p><strong>Status:</strong> <span style="color: #4facfe;">Active</span></p>' +
+            '</div>';
             document.getElementById('configResultsModal').classList.add('active');
         }
 
