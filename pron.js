@@ -474,6 +474,40 @@ const HTML_CONTENT = `
   </div>
 
   <!-- Modals -->
+  <div id="userDetailModal" class="modal fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
+    <div class="glass w-full max-w-md rounded-3xl overflow-hidden shadow-2xl p-6 space-y-6">
+      <div class="flex justify-between items-center"><h3 class="text-xl font-bold">User Details</h3><button onclick="document.getElementById('userDetailModal').classList.add('hidden')">✕</button></div>
+      <div id="userDetailContent" class="space-y-4"></div>
+      <div class="flex justify-end"><button onclick="document.getElementById('userDetailModal').classList.add('hidden')" class="btn bg-slate-800">Close</button></div>
+    </div>
+  </div>
+
+  <div id="configResultsModal" class="modal fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
+    <div class="glass w-full max-w-lg rounded-3xl overflow-hidden shadow-2xl p-6 space-y-6">
+      <div class="flex justify-between items-center"><h3 class="text-xl font-bold">Worker Config</h3><button onclick="document.getElementById('configResultsModal').classList.add('hidden')">✕</button></div>
+      <div class="space-y-4">
+        <input type="hidden" id="configWorkerName">
+        <input type="hidden" id="configWorkerAccount">
+        <div id="configResultsContent"></div>
+      </div>
+      <div class="flex justify-end"><button onclick="document.getElementById('configResultsModal').classList.add('hidden')" class="btn bg-slate-800">Close</button></div>
+    </div>
+  </div>
+
+  <div id="configModal" class="modal fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
+    <div class="glass w-full max-w-lg rounded-3xl overflow-hidden shadow-2xl p-6 space-y-6">
+      <div class="flex justify-between items-center"><h3 class="text-xl font-bold">Export/Import Config</h3><button onclick="document.getElementById('configModal').classList.add('hidden')">✕</button></div>
+      <div class="space-y-4">
+        <button onclick="exportConfig()" class="btn btn-primary w-full">Export to JSON</button>
+        <div class="border-t border-slate-700 pt-4">
+          <p class="text-sm text-slate-400 mb-2">Import JSON Config:</p>
+          <input type="file" id="importFile" class="hidden" onchange="importConfig(this)">
+          <button onclick="document.getElementById('importFile').click()" class="btn bg-slate-800 w-full">Choose File & Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="createWorkerModal" class="modal fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
     <div class="glass w-full max-w-2xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
       <div class="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
@@ -597,46 +631,78 @@ const HTML_CONTENT = `
     let currentFilterAccount = '';
 
     document.addEventListener('DOMContentLoaded', function() {
+      console.log('DOM Content Loaded');
       setupEventListeners();
-      if (users.length > 0) { updateUI(); fetchAllWorkers(); fetchAllZones(); }
+      if (users.length > 0) {
+        updateUI();
+        fetchAllWorkers();
+        fetchAllZones();
+      }
     });
 
     function setupEventListeners() {
-      document.getElementById('burgerBtn').addEventListener('click', function() {
+      const addEvt = (id, type, fn) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener(type, fn);
+        else console.warn('Element not found:', id);
+      };
+
+      addEvt('burgerBtn', 'click', function() {
         this.classList.toggle('burger-active');
         document.getElementById('sidebar').classList.toggle('sidebar-hidden');
       });
-      document.getElementById('submitLogin').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', logoutCurrent);
-      document.getElementById('createWorkerBtn').addEventListener('click', showCreateWorkerModal);
-      document.getElementById('bulkCreateBtn').addEventListener('click', showBulkCreateModal);
-      document.getElementById('wildcardBtn').addEventListener('click', showWildcardModal);
-      document.getElementById('analyticsBtn').addEventListener('click', showAnalyticsModal);
-      document.getElementById('exportConfigBtn').addEventListener('click', () => document.getElementById('configModal').classList.remove('hidden'));
-      document.getElementById('cancelCreateWorker').addEventListener('click', () => document.getElementById('createWorkerModal').classList.add('hidden'));
-      document.getElementById('cancelWildcard').addEventListener('click', () => document.getElementById('wildcardModal').classList.add('hidden'));
-      document.getElementById('submitCreateWorker').addEventListener('click', createWorker);
-      document.getElementById('refreshWorkers').addEventListener('click', fetchAllWorkers);
-      document.getElementById('selectAllBtn').addEventListener('click', selectAllWorkers);
-      document.getElementById('deselectAllBtn').addEventListener('click', deselectAllWorkers);
-      document.getElementById('submitEditWorker').addEventListener('click', updateWorker);
-      document.getElementById('reloadScriptBtn').addEventListener('click', () => editWorker(currentEditingWorker.name, currentEditingWorker.email, currentEditingWorker.accId));
-      document.getElementById('submitBulkCreate').addEventListener('click', bulkCreateWorkers);
-      document.getElementById('submitWildcard').addEventListener('click', registerWildcard);
-      document.getElementById('listWildcardBtn').addEventListener('click', listWildcardDomains);
-      document.getElementById('autoDiscoverBtn').addEventListener('click', autoDiscoverConfig);
-      document.getElementById('refreshProxyBtn').addEventListener('click', refreshProxyIP);
-      document.getElementById('searchWorkers').addEventListener('input', (e) => { currentSearchTerm = e.target.value.toLowerCase(); displayWorkers(); });
-      document.getElementById('filterAccount').addEventListener('change', (e) => { currentFilterAccount = e.target.value; displayWorkers(); });
-      document.getElementById('autoRefreshToggle').addEventListener('change', (e) => toggleAutoRefresh(e.target.checked));
-      document.getElementById('workerTemplate').addEventListener('change', (e) => {
-        document.getElementById('customUrlGroup').classList.toggle('hidden', e.target.value !== 'custom');
-        if (e.target.value.includes('nautica')) { document.getElementById('proxyInfo').classList.remove('hidden'); refreshProxyIP(); }
-        else document.getElementById('proxyInfo').classList.add('hidden');
+      addEvt('submitLogin', 'click', login);
+      addEvt('logoutBtn', 'click', logoutCurrent);
+      addEvt('createWorkerBtn', 'click', showCreateWorkerModal);
+      addEvt('bulkCreateBtn', 'click', showBulkCreateModal);
+      addEvt('wildcardBtn', 'click', showWildcardModal);
+      addEvt('analyticsBtn', 'click', showAnalyticsModal);
+      addEvt('userDetailBtn', 'click', showUserDetail);
+      addEvt('exportConfigBtn', 'click', () => document.getElementById('configModal').classList.remove('hidden'));
+      addEvt('cancelCreateWorker', 'click', () => document.getElementById('createWorkerModal').classList.add('hidden'));
+      addEvt('cancelWildcard', 'click', () => document.getElementById('wildcardModal').classList.add('hidden'));
+      addEvt('cancelAnalytics', 'click', () => document.getElementById('analyticsModal').classList.add('hidden'));
+      addEvt('cancelBulkCreate', 'click', () => document.getElementById('bulkCreateModal').classList.add('hidden'));
+      addEvt('cancelEditWorker', 'click', () => document.getElementById('editWorkerModal').classList.add('hidden'));
+      addEvt('bulkBarCloseBtn', 'click', closeBulkActions);
+      addEvt('submitCreateWorker', 'click', createWorker);
+      addEvt('refreshWorkers', 'click', fetchAllWorkers);
+      addEvt('selectAllBtn', 'click', selectAllWorkers);
+      addEvt('deselectAllBtn', 'click', deselectAllWorkers);
+      addEvt('submitEditWorker', 'click', updateWorker);
+      addEvt('reloadScriptBtn', 'click', () => editWorker(currentEditingWorker.name, currentEditingWorker.email, currentEditingWorker.accId));
+      addEvt('submitBulkCreate', 'click', bulkCreateWorkers);
+      addEvt('submitWildcard', 'click', registerWildcard);
+      addEvt('listWildcardBtn', 'click', listWildcardDomains);
+      addEvt('autoDiscoverBtn', 'click', autoDiscoverConfig);
+      addEvt('refreshProxyIP', 'click', refreshProxyIP);
+      addEvt('searchWorkers', 'input', (e) => { currentSearchTerm = e.target.value.toLowerCase(); displayWorkers(); });
+      addEvt('filterAccount', 'change', (e) => { currentFilterAccount = e.target.value; displayWorkers(); });
+      addEvt('autoRefreshToggle', 'change', (e) => toggleAutoRefresh(e.target.checked));
+
+      const tplEl = document.getElementById('workerTemplate');
+      if (tplEl) {
+        tplEl.addEventListener('change', (e) => {
+          const customUrlGroup = document.getElementById('customUrlGroup');
+          const proxyInfo = document.getElementById('proxyInfo');
+          if (customUrlGroup) customUrlGroup.classList.toggle('hidden', e.target.value !== 'custom');
+          if (proxyInfo) {
+            if (e.target.value.includes('nautica')) { proxyInfo.classList.remove('hidden'); refreshProxyIP(); }
+            else proxyInfo.classList.add('hidden');
+          }
+        });
+      }
+
+      addEvt('subdomainPrefix', 'input', updateWildcardPreview);
+      addEvt('wildcardZoneSelect', 'change', updateWildcardPreview);
+      addEvt('wildcardAccountSelect', 'change', (e) => loadWildcardWorkers(e.target.value));
+      addEvt('accountSelect', 'change', (e) => {
+        currentUserIndex = users.findIndex(u => u.accountId === e.target.value);
+        if (currentUserIndex === -1) currentUserIndex = 0;
+        localStorage.setItem('cf_current_user', String(currentUserIndex));
+        updateUI();
+        fetchAllWorkers();
       });
-      document.getElementById('subdomainPrefix').addEventListener('input', updateWildcardPreview);
-      document.getElementById('wildcardZoneSelect').addEventListener('change', updateWildcardPreview);
-      document.getElementById('wildcardAccountSelect').addEventListener('change', (e) => loadWildcardWorkers(e.target.value));
     }
 
     function showNotification(msg, type = 'success') {
@@ -651,27 +717,72 @@ const HTML_CONTENT = `
     async function login() {
       const email = document.getElementById('email').value;
       const apiKey = document.getElementById('apiKey').value;
+      const submitBtn = document.getElementById('submitLogin');
+
       if (!email || !apiKey) return showNotification('Email and API Key required', 'error');
-      showNotification('Logging in...');
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Connecting...';
+      showNotification('Verifying credentials...');
+
       try {
-        const res = await fetch('/api/userInfo', { method: 'POST', body: JSON.stringify({ email, globalAPIKey: apiKey }) });
+        const res = await fetch('/api/userInfo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, globalAPIKey: apiKey })
+        });
         const d = await res.json();
-        if (d.success) {
-          const accRes = await fetch('/api/accounts', { method: 'POST', body: JSON.stringify({ email, globalAPIKey: apiKey }) });
-          const accD = await accRes.json();
-          if (accD.success) {
-            const user = { email, apiKey, userInfo: d.result, accounts: accD.result, accountId: accD.result[0]?.id };
-            const idx = users.findIndex(u => u.email === email);
-            if (idx >= 0) users[idx] = user; else users.push(user);
-            localStorage.setItem('cf_users', JSON.stringify(users));
-            updateUI(); fetchAllWorkers(); fetchAllZones();
-            showNotification('Login successful!');
-          }
+
+        if (!d.success) throw new Error(d.message || 'Login failed');
+
+        const accRes = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, globalAPIKey: apiKey })
+        });
+        const accD = await accRes.json();
+
+        if (!accD.success) throw new Error(accD.message || 'Failed to fetch accounts');
+
+        const user = {
+          email,
+          apiKey,
+          userInfo: d.result,
+          accounts: accD.result,
+          accountId: accD.result[0]?.id
+        };
+
+        const idx = users.findIndex(u => u.email === email);
+        if (idx >= 0) {
+          users[idx] = user;
+          currentUserIndex = idx;
+        } else {
+          users.push(user);
+          currentUserIndex = users.length - 1;
         }
-      } catch (e) { showNotification('Login failed', 'error'); }
+
+        localStorage.setItem('cf_users', JSON.stringify(users));
+        localStorage.setItem('cf_current_user', currentUserIndex);
+
+        updateUI();
+        await Promise.all([fetchAllWorkers(), fetchAllZones()]);
+        showNotification('Welcome back, ' + (d.result.first_name || email));
+      } catch (e) {
+        console.error('Login error:', e);
+        showNotification(e.message, 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Connect Account';
+      }
     }
 
-    function logoutCurrent() { users.splice(currentUserIndex, 1); localStorage.setItem('cf_users', JSON.stringify(users)); updateUI(); }
+    function logoutCurrent() {
+      users.splice(currentUserIndex, 1);
+      currentUserIndex = 0;
+      localStorage.setItem('cf_users', JSON.stringify(users));
+      localStorage.setItem('cf_current_user', '0');
+      updateUI();
+    }
 
     function updateUI() {
       const has = users.length > 0;
@@ -749,6 +860,23 @@ const HTML_CONTENT = `
       const p = document.getElementById('subdomainPrefix').value.trim();
       const zoneName = z.options[z.selectedIndex]?.text;
       document.getElementById('fullDomainPreview').textContent = (p && zoneName && zoneName !== 'Select Domain...') ? p + '.' + zoneName : '---';
+    }
+
+    function showCreateWorkerModal() {
+      const uSel = document.getElementById('createAccountSelect');
+      uSel.innerHTML = '';
+      users.forEach((u, i) => uSel.innerHTML += '<option value="' + i + '" ' + (i === currentUserIndex ? 'selected' : '') + '>' + u.email + '</option>');
+      document.getElementById('createResult').classList.add('hidden');
+      document.getElementById('createWorkerModal').classList.remove('hidden');
+    }
+
+    function showBulkCreateModal() {
+      const uSel = document.getElementById('bulkAccountsSelect');
+      uSel.innerHTML = '';
+      users.forEach((u, i) => uSel.innerHTML += '<option value="' + i + '">' + u.email + '</option>');
+      document.getElementById('bulkResults').classList.add('hidden');
+      document.getElementById('bulkProgress').style.width = '0%';
+      document.getElementById('bulkCreateModal').classList.remove('hidden');
     }
 
     function showWildcardModal() {
@@ -957,8 +1085,45 @@ const HTML_CONTENT = `
 
     function showUserDetail() {
       const u = users[currentUserIndex];
-      document.getElementById('userDetailContent').innerHTML = '<div class="space-y-2"><p><b>Email:</b> ' + u.email + '</p><p><b>Account ID:</b> ' + u.accountId + '</p></div>';
+      if (!u) return;
+      document.getElementById('userDetailContent').innerHTML =
+        '<div class="space-y-3 bg-slate-800/50 p-4 rounded-2xl border border-slate-700">' +
+          '<div><p class="text-xs text-slate-500 uppercase">Email</p><p class="font-medium">' + u.email + '</p></div>' +
+          '<div><p class="text-xs text-slate-500 uppercase">Account ID</p><p class="font-mono text-xs break-all">' + u.accountId + '</p></div>' +
+          '<div><p class="text-xs text-slate-500 uppercase">Status</p><span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Connected</span></div>' +
+        '</div>';
       document.getElementById('userDetailModal').classList.remove('hidden');
+    }
+
+    function exportConfig() {
+      const data = JSON.stringify(users, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'cf_manager_config_' + new Date().toISOString().slice(0,10) + '.json';
+      a.click();
+      showNotification('Config exported!');
+    }
+
+    function importConfig(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const imported = JSON.parse(e.target.result);
+          if (Array.isArray(imported)) {
+            users = imported;
+            localStorage.setItem('cf_users', JSON.stringify(users));
+            showNotification('Config imported successfully!');
+            location.reload();
+          }
+        } catch (err) {
+          showNotification('Invalid config file', 'error');
+        }
+      };
+      reader.readAsText(file);
     }
 
     window.copyToClipboard = (t) => { navigator.clipboard.writeText(t); showNotification('Copied!'); };
